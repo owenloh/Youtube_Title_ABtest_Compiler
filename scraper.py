@@ -235,12 +235,13 @@ def get_video_title(video_id: str) -> Optional[str]:
     return None
 
 
-def sample_titles(video_id: str, count: int) -> List[str]:
+def sample_titles(video_id: str, count: int, delay: float = 1.5) -> List[str]:
     """Fetch title `count` times (with small delay) to collect A/B samples."""
     seen = []
-    for _ in range(count):
+    for i in range(count):
         title = get_video_title(video_id)
         if title:
             seen.append(title)
-        time.sleep(1.5)  # be nice to YouTube
+        if i < count - 1:  # Don't sleep after last sample
+            time.sleep(delay)
     return seen

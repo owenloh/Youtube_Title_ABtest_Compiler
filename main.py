@@ -6,6 +6,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
+from threading import Thread
 from typing import List, Optional
 
 from config import (
@@ -41,6 +42,9 @@ from storage import (
     update_title_history,
 )
 from youtube_comment import post_comment, update_comment
+
+# Thread pool for background processing
+executor = ThreadPoolExecutor(max_workers=10)
 
 
 def build_comment_text(video_id: str, is_finalized: bool = False) -> str:
@@ -78,11 +82,62 @@ def build_comment_text(video_id: str, is_finalized: bool = False) -> str:
     return "\n".join(lines).strip()
 
 
-def process_video(video_id: str, channel_id: str, channel_name: str, published_at: datetime):
-    """Process a single video: sample titles, update stats, post/update comment."""
+def process_video(video_id: str, channel_id: str, channel_name: str, published_at: datetime, fast_first: bool = True):
+    """Process a single video: sample titles, update stats, post/update comment.
+    
+    fast_first: If True and no comment exists yet, post quickly with fewer samples first,
+                then continue sampling in background.
+    """
     print(f"[{channel_name}] Processing video {video_id} (published {published_at.date()})")
     
-    # Sample titles
+    # Check if this is a new video (no comment yet)
+    existing_comment = get_comment_id(video_id)
+    
+    if fast_first and not existing_comment and not SKIP_COMMENT:
+        # FAST PATH: Get just 3 samples quickly, post comment ASAP
+        print(f"[{channel_name}] Fast-posting comment for {video_id}...")
+        quick_titles = sample_titles(video_id, 3, delay=0.5)  # 3 samples, 0.5s delay = 1.5s total
+        
+        if quick_titles:
+            for title in quick_titles:
+                add_title_sample(video_id, title)
+            
+            today = date.today()
+            update_title_history(video_id, list(set(quick_titles)), today)
+            
+            comment_text = build_comment_text(video_id, is_finalized=False)
+            new_id = post_comment(video_id, comment_text)
+            if new_id:
+                set_comment_id(video_id, new_id)
+                print(f"[{channel_name}] FAST COMMENT POSTED for {video_id}")
+            else:
+                print(f"[{channel_name}] Failed to post fast comment for {video_id}")
+        
+        # Continue with more samples in background
+        remaining_samples = SAMPLES_PER_RUN - 3
+        if remaining_samples > 0:
+            titles = sample_titles(video_id, remaining_samples)
+            if titles:
+                for title in titles:
+                    add_title_sample(video_id, title)
+                
+                # Update history with all titles
+                all_titles = set(quick_titles) | set(titles)
+                update_title_history(video_id, list(all_titles), today)
+                
+                # Update comment with full data
+                comment_id = get_comment_id(video_id)
+                if comment_id:
+                    comment_text = build_comment_text(video_id, is_finalized=False)
+                    if update_comment(comment_id, comment_text):
+                        update_comment_edited(video_id)
+                        print(f"[{channel_name}] Updated comment with full samples for {video_id}")
+        
+        total = get_total_samples(video_id)
+        print(f"[{channel_name}] Video {video_id}: {total} total samples, {len(set(quick_titles + (titles if 'titles' in dir() else [])))} unique titles")
+        return
+    
+    # NORMAL PATH: Full sampling (for updates or if fast_first disabled)
     titles = sample_titles(video_id, SAMPLES_PER_RUN)
     if not titles:
         print(f"[{channel_name}] No titles found for {video_id}")
@@ -138,82 +193,60 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
 
 def check_new_videos():
     """
-    Check all channels for new videos.
-    Find the first known video that appears in RSS (latest, then 2nd latest, etc.) and slice
-    everything before it as new. No duplicates: add_video uses ON CONFLICT DO NOTHING.
+    Check all channels for new videos IN PARALLEL.
+    When new video found, spawn background task to process it immediately.
     """
     print(f"\n=== Checking for new videos at {datetime.now()} ===")
     
-    for channel_id, channel_name in CHANNELS:
-        print(f"\n[{channel_name}] Checking channel {channel_id}")
-        
+    def check_channel(channel_id: str, channel_name: str) -> List[tuple]:
+        """Check single channel, return list of new videos to process."""
+        new_videos = []
         try:
-            # Get videos from RSS (newest first)
             rss_videos = get_videos_from_rss(channel_id, max_videos=50)
             if not rss_videos:
-                print(f"[{channel_name}] No videos found in RSS")
-                continue
+                return []
             
             add_channel(channel_id, channel_name)
-            
-            # Known video IDs for this channel (newest first) - use as anchors for slicing
             known_ids = set(get_known_video_ids_for_channel(channel_id, limit=50))
-            rss_ids = {video_id for video_id, _ in rss_videos}
             
             if known_ids:
-                # Find first RSS position that matches any known video (latest, 2nd latest, etc.)
                 anchor_index = None
-                anchor_video_id = None
                 for i, (video_id, _) in enumerate(rss_videos):
                     if video_id in known_ids:
                         anchor_index = i
-                        anchor_video_id = video_id
                         break
-                
-                if anchor_index is not None:
-                    # Slice: everything before the anchor is new
-                    new_videos_raw = rss_videos[:anchor_index]
-                    print(f"[{channel_name}] Anchor {anchor_video_id} at position {anchor_index}, {len(new_videos_raw)} new videos")
-                else:
-                    # No known video in RSS: either deleted or 50+ new videos pushed them out.
-                    # Don't mark as deleted (ambiguous). Use all RSS as candidates; DB prevents duplicates.
-                    new_videos_raw = rss_videos
-                    print(f"[{channel_name}] No known video in RSS; treating {len(rss_videos)} as candidates (duplicates skipped by DB)")
+                new_videos_raw = rss_videos[:anchor_index] if anchor_index is not None else rss_videos
             else:
-                # No videos in DB yet - all RSS videos are candidates
                 new_videos_raw = rss_videos
-                print(f"[{channel_name}] No previous videos in DB, {len(rss_videos)} candidates")
             
-            # Filter: date cutoff, shorts; add to DB (ON CONFLICT DO NOTHING prevents duplicates)
-            new_videos = []
             for video_id, published_at in new_videos_raw:
                 if published_at.date() < CUTOFF_DATE:
                     continue
                 if is_short(video_id):
                     add_video(video_id, channel_id, published_at, is_short=True)
                     continue
-                # Only count as "new" if we actually inserted (not already in DB)
                 if add_video(video_id, channel_id, published_at, is_short=False):
-                    new_videos.append((video_id, published_at))
-                    print(f"[{channel_name}] New video: {video_id} (published {published_at.date()})")
-            
-            # Process only newly added long-form videos (no duplicates)
-            if new_videos:
-                print(f"[{channel_name}] Processing {len(new_videos)} new long-form videos")
-                for video_id, published_at in new_videos:
-                    try:
-                        process_video(video_id, channel_id, channel_name, published_at)
-                    except Exception as e:
-                        print(f"[{channel_name}] Error processing {video_id}: {e}", file=sys.stderr)
-                        import traceback
-                        traceback.print_exc()
-            else:
-                print(f"[{channel_name}] No new long-form videos to process")
+                    new_videos.append((video_id, channel_id, channel_name, published_at))
+                    print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc()
+        
+        return new_videos
+    
+    # Check all channels in parallel
+    futures = {
+        executor.submit(check_channel, ch_id, ch_name): (ch_id, ch_name)
+        for ch_id, ch_name in CHANNELS
+    }
+    
+    # Collect new videos and spawn processing tasks
+    for future in as_completed(futures):
+        new_videos = future.result()
+        for video_id, channel_id, channel_name, published_at in new_videos:
+            # Process in background - don't block other channels
+            executor.submit(process_video, video_id, channel_id, channel_name, published_at)
+            print(f"[{channel_name}] Spawned background task for {video_id}")
 
 
 def check_active_videos():
