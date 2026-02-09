@@ -18,9 +18,9 @@ HEADERS = {
 }
 
 
-def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
+def get_videos_from_rss(channel_id: str, max_videos: int = 50, max_retries: int = 3) -> List[Tuple[str, datetime]]:
     """
-    Get videos from channel RSS feed.
+    Get videos from channel RSS feed with retry logic.
     Returns: [(video_id, published_at), ...] ordered newest first.
     
     Why RSS over API?
@@ -31,9 +31,34 @@ def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str
     - RSS feed is public and doesn't require authentication
     """
     url = RSS_URL.format(channel_id=channel_id)
-    r = requests.get(url, headers=HEADERS, timeout=15)
-    r.raise_for_status()
-    root = ET.fromstring(r.text)
+    
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            # Add small delay between retries
+            if attempt > 0:
+                time.sleep(2 ** attempt)  # 2s, 4s backoff
+            
+            r = requests.get(url, headers=HEADERS, timeout=15)
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+            break  # Success, exit retry loop
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response.status_code == 404 and attempt < max_retries - 1:
+                print(f"RSS 404 for {channel_id}, retry {attempt + 1}/{max_retries}...")
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                continue
+            raise
+    else:
+        # All retries failed
+        if last_error:
+            raise last_error
+        return []
     
     ns = {"yt": "http://www.youtube.com/xml/schemas/2015", "atom": "http://www.w3.org/2005/Atom"}
     entries = root.findall(".//atom:entry", namespaces=ns)
