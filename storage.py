@@ -54,6 +54,7 @@ def init_db():
                     is_short BOOLEAN DEFAULT FALSE,
                     is_ignored BOOLEAN DEFAULT FALSE,
                     is_deleted BOOLEAN DEFAULT FALSE,
+                    is_active BOOLEAN DEFAULT TRUE,
                     comment_id TEXT,
                     comment_posted_at TIMESTAMP,
                     comment_last_edited_at TIMESTAMP,
@@ -102,6 +103,20 @@ def init_db():
             
             # Create index for is_deleted (safe to run even if column already exists)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_deleted ON videos(is_deleted)")
+            
+            # Migration: add is_active column if it doesn't exist
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='videos' AND column_name='is_active'
+                    ) THEN
+                        ALTER TABLE videos ADD COLUMN is_active BOOLEAN DEFAULT TRUE;
+                    END IF;
+                END $$;
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_active ON videos(is_active)")
         conn.commit()
     finally:
         return_conn(conn)
@@ -300,6 +315,20 @@ def mark_video_deleted(video_id: str):
         return_conn(conn)
 
 
+def mark_video_inactive(video_id: str):
+    """Mark video as inactive (stagnated - same title for N days). Permanent."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET is_active = FALSE WHERE video_id = %s",
+                (video_id,),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
 def update_last_checked(video_id: str):
     """Update last checked timestamp."""
     conn = get_conn()
@@ -315,14 +344,17 @@ def update_last_checked(video_id: str):
 
 
 def get_active_videos() -> List[dict]:
-    """Get all active videos (not ignored, not shorts, not deleted) for hourly checks."""
+    """Get all active videos for hourly checks.
+    
+    Only returns videos where is_active = TRUE (not stagnated).
+    """
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT video_id, channel_id, published_at, comment_id "
                 "FROM videos "
-                "WHERE is_ignored = FALSE AND is_short = FALSE AND is_deleted = FALSE AND comment_id IS NOT NULL "
+                "WHERE is_active = TRUE AND is_ignored = FALSE AND is_short = FALSE AND is_deleted = FALSE AND comment_id IS NOT NULL "
                 "ORDER BY published_at DESC"
             )
             return [dict(row) for row in cur.fetchall()]
@@ -457,7 +489,7 @@ def get_all_videos_summary() -> List[dict]:
             cur.execute(
                 """
                 SELECT v.video_id, v.channel_id, c.display_name as channel_name,
-                       v.published_at, v.is_short, v.is_ignored, v.is_deleted,
+                       v.published_at, v.is_short, v.is_ignored, v.is_deleted, v.is_active,
                        v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
                        v.last_checked_at,
                        COUNT(DISTINCT ts.title_text) as unique_titles,

@@ -36,6 +36,7 @@ from storage import (
     is_video_active,
     mark_video_deleted,
     mark_video_ignored,
+    mark_video_inactive,
     set_comment_id,
     update_comment_edited,
     update_last_checked,
@@ -299,24 +300,36 @@ def check_new_videos():
 def check_active_videos():
     """Check active videos for title changes (hourly task).
     
-    Only checks videos that are still "active" (title changed in last N days).
-    Videos with same single title for N days straight are skipped.
+    Videos are already filtered by is_active = TRUE in the database.
+    If a video has stagnated (same single title for N days), mark it inactive permanently.
     """
     print(f"\n=== Checking active videos at {datetime.now()} ===")
     
-    all_videos = get_active_videos()
-    
-    # Filter to only truly active videos (not stagnated)
-    active_videos = [v for v in all_videos if is_video_active(v["video_id"], INACTIVE_DAYS_THRESHOLD)]
-    stagnated_count = len(all_videos) - len(active_videos)
-    
-    print(f"Found {len(active_videos)} active videos to check ({stagnated_count} stagnated, skipped)")
+    active_videos = get_active_videos()
+    print(f"Found {len(active_videos)} active videos to check")
     
     for video_info in active_videos:
         video_id = video_info["video_id"]
         channel_id = video_info["channel_id"]
         
         try:
+            # Check if video has stagnated
+            if not is_video_active(video_id, INACTIVE_DAYS_THRESHOLD):
+                print(f"Video {video_id} has stagnated (same title for {INACTIVE_DAYS_THRESHOLD}+ days) - marking inactive")
+                mark_video_inactive(video_id)
+                
+                # Update comment to show finalized
+                if not SKIP_COMMENT:
+                    comment_text = build_comment_text(video_id, is_finalized=True)
+                    comment_id = get_comment_id(video_id)
+                    if comment_id:
+                        try:
+                            if update_comment(comment_id, comment_text):
+                                update_comment_edited(video_id)
+                                print(f"Updated comment for {video_id} (finalized)")
+                        except Exception:
+                            pass
+                continue
             update_last_checked(video_id)
             
             # Get current unique titles

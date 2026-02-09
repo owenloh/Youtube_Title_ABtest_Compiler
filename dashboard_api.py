@@ -84,7 +84,8 @@ def get_stats():
     try:
         videos = get_all_videos_summary()
         total_videos = len(videos)
-        active_videos = sum(1 for v in videos if not v.get("is_ignored") and not v.get("is_short") and not v.get("is_deleted"))
+        active_videos = sum(1 for v in videos if v.get("is_active") and not v.get("is_ignored") and not v.get("is_short") and not v.get("is_deleted"))
+        inactive_videos = sum(1 for v in videos if not v.get("is_active") and not v.get("is_ignored") and not v.get("is_short") and not v.get("is_deleted"))
         ignored_videos = sum(1 for v in videos if v.get("is_ignored"))
         deleted_videos = sum(1 for v in videos if v.get("is_deleted"))
         shorts = sum(1 for v in videos if v.get("is_short"))
@@ -93,6 +94,7 @@ def get_stats():
         return jsonify({
             "total_videos": total_videos,
             "active_videos": active_videos,
+            "inactive_videos": inactive_videos,
             "ignored_videos": ignored_videos,
             "deleted_videos": deleted_videos,
             "shorts": shorts,
