@@ -285,22 +285,26 @@ def check_new_videos():
                 if anchor_index is not None:
                     # Only process videos newer than anchor (before it in list)
                     candidates = rss_videos[:anchor_index]
+                    
+                    for video_id, _ in candidates:
+                        if video_id in known_ids:
+                            continue
+                        
+                        if is_short(video_id):
+                            add_video(video_id, channel_slug, datetime.now(), is_short=True)
+                            print(f"[{channel_name}] Skipping {video_id} (Short)")
+                            continue
+                        
+                        if add_video(video_id, channel_slug, datetime.now(), is_short=False):
+                            new_videos.append((video_id, channel_slug, channel_name, datetime.now()))
+                            print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
-                    # No anchor - first run via HTTP, only take first 3
-                    candidates = rss_videos[:3]
-                
-                for video_id, _ in candidates:
-                    if video_id in known_ids:
-                        continue
-                    
-                    if is_short(video_id):
-                        add_video(video_id, channel_slug, datetime.now(), is_short=True)
-                        print(f"[{channel_name}] Skipping {video_id} (Short)")
-                        continue
-                    
-                    if add_video(video_id, channel_slug, datetime.now(), is_short=False):
-                        new_videos.append((video_id, channel_slug, channel_name, datetime.now()))
-                        print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
+                    # No anchor - first run via HTTP
+                    # Just store the first video as anchor, process nothing
+                    first_id, _ = rss_videos[0]
+                    if not is_short(first_id):
+                        add_video(first_id, channel_slug, datetime.now(), is_short=False)
+                        print(f"[{channel_name}] First HTTP run - stored {first_id} as anchor, will process new videos next run")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
