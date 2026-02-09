@@ -444,7 +444,7 @@ def run_scheduler():
     print(f"  - Inactive threshold: {INACTIVE_DAYS_THRESHOLD} days")
     
     last_new_check = 0
-    last_active_check = 0
+    last_active_check = time.time()  # Don't run hourly check immediately on startup
     
     try:
         while True:

@@ -3,7 +3,7 @@ from datetime import datetime, date
 from flask import Flask, jsonify, send_file
 from flask_cors import CORS
 
-from storage import get_all_videos_summary, get_video_info, init_db
+from storage import get_all_videos_summary, get_active_videos_for_dashboard, get_video_info, init_db
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend to call from any origin
@@ -49,9 +49,9 @@ def health():
 
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
-    """Get summary of all videos."""
+    """Get summary of active videos only (excludes anchors/inactive)."""
     try:
-        videos = get_all_videos_summary()
+        videos = get_active_videos_for_dashboard()
         # Convert datetime/date objects to ISO strings for JSON
         for video in videos:
             for key, value in video.items():
@@ -82,21 +82,20 @@ def get_video(video_id: str):
 def get_stats():
     """Get overall statistics."""
     try:
-        videos = get_all_videos_summary()
-        total_videos = len(videos)
-        active_videos = sum(1 for v in videos if v.get("is_active") and not v.get("is_ignored") and not v.get("is_deleted"))
-        inactive_videos = sum(1 for v in videos if not v.get("is_active") and not v.get("is_ignored") and not v.get("is_deleted"))
-        ignored_videos = sum(1 for v in videos if v.get("is_ignored"))
-        deleted_videos = sum(1 for v in videos if v.get("is_deleted"))
-        videos_with_comments = sum(1 for v in videos if v.get("comment_id"))
+        all_videos = get_all_videos_summary()
+        active_videos = get_active_videos_for_dashboard()
+        
+        # Active = being tracked (after cutoff, has/will have comment)
+        # Anchors = inactive reference points (before cutoff, no comment)
+        anchors = sum(1 for v in all_videos if not v.get("is_active"))
+        tracked = len(active_videos)
+        with_comments = sum(1 for v in active_videos if v.get("comment_id"))
         
         return jsonify({
-            "total_videos": total_videos,
-            "active_videos": active_videos,
-            "inactive_videos": inactive_videos,
-            "ignored_videos": ignored_videos,
-            "deleted_videos": deleted_videos,
-            "videos_with_comments": videos_with_comments,
+            "tracked_videos": tracked,
+            "videos_with_comments": with_comments,
+            "anchor_videos": anchors,
+            "total_in_db": len(all_videos),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

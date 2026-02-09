@@ -485,7 +485,7 @@ def get_video_info(video_id: str) -> Optional[dict]:
 
 
 def get_all_videos_summary() -> List[dict]:
-    """Get summary of all videos for dashboard."""
+    """Get summary of all videos (for stats calculation)."""
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -500,6 +500,32 @@ def get_all_videos_summary() -> List[dict]:
                 FROM videos v
                 JOIN channels c ON v.channel_id = c.channel_id
                 LEFT JOIN title_samples ts ON v.video_id = ts.video_id
+                GROUP BY v.video_id, c.display_name
+                ORDER BY v.published_at DESC
+                """,
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        return_conn(conn)
+
+
+def get_active_videos_for_dashboard() -> List[dict]:
+    """Get only active videos for dashboard display (excludes anchors/inactive)."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT v.video_id, v.channel_id, c.display_name as channel_name,
+                       v.published_at, v.is_ignored, v.is_deleted, v.is_active,
+                       v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
+                       v.last_checked_at,
+                       COUNT(DISTINCT ts.title_text) as unique_titles,
+                       COUNT(ts.id) as total_samples
+                FROM videos v
+                JOIN channels c ON v.channel_id = c.channel_id
+                LEFT JOIN title_samples ts ON v.video_id = ts.video_id
+                WHERE v.is_active = TRUE
                 GROUP BY v.video_id, c.display_name
                 ORDER BY v.published_at DESC
                 """,
