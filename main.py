@@ -199,16 +199,19 @@ def check_new_videos():
     """
     print(f"\n=== Checking for new videos at {datetime.now()} ===")
     
-    def check_channel(channel_id: str, channel_name: str) -> List[tuple]:
+    def check_channel(channel_slug: str, channel_name: str) -> List[tuple]:
         """Check single channel, return list of new videos to process."""
         new_videos = []
         try:
-            rss_videos = get_videos_from_rss(channel_id, max_videos=50)
+            print(f"[{channel_name}] Checking channel {channel_slug}")
+            rss_videos = get_videos_from_rss(channel_slug, expected_name=channel_name, max_videos=50)
             if not rss_videos:
+                print(f"[{channel_name}] No videos found")
                 return []
             
-            add_channel(channel_id, channel_name)
-            known_ids = set(get_known_video_ids_for_channel(channel_id, limit=50))
+            print(f"[{channel_name}] Found {len(rss_videos)} videos from RSS/scrape")
+            add_channel(channel_slug, channel_name)
+            known_ids = set(get_known_video_ids_for_channel(channel_slug, limit=50))
             
             if known_ids:
                 anchor_index = None
@@ -219,6 +222,8 @@ def check_new_videos():
                 new_videos_raw = rss_videos[:anchor_index] if anchor_index is not None else rss_videos
             else:
                 new_videos_raw = rss_videos
+            
+            print(f"[{channel_name}] {len(new_videos_raw)} candidates, {len(known_ids)} known")
             
             # Limit how many videos to process on first run (no known_ids)
             # For channel page scrape (no dates), only take the first 3 videos (most recent)
@@ -233,17 +238,17 @@ def check_new_videos():
                         continue
                 elif published_at.date() < CUTOFF_DATE:
                     # Video is before cutoff - store as anchor but don't process
-                    add_video(video_id, channel_id, published_at, is_short=False)
+                    add_video(video_id, channel_slug, published_at, is_short=False)
                     continue
                 
                 if is_short(video_id):
-                    add_video(video_id, channel_id, published_at or datetime.now(), is_short=True)
+                    add_video(video_id, channel_slug, published_at or datetime.now(), is_short=True)
                     continue
                 
-                if add_video(video_id, channel_id, published_at or datetime.now(), is_short=False):
+                if add_video(video_id, channel_slug, published_at or datetime.now(), is_short=False):
                     # On first run, only process the most recent few videos
                     if processed_count < max_first_run:
-                        new_videos.append((video_id, channel_id, channel_name, published_at or datetime.now()))
+                        new_videos.append((video_id, channel_slug, channel_name, published_at or datetime.now()))
                         processed_count += 1
                         print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
                     elif not known_ids:
@@ -251,26 +256,28 @@ def check_new_videos():
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
         
         return new_videos
     
     # Check all channels in parallel
     futures = {
-        executor.submit(check_channel, ch_id, ch_name): (ch_id, ch_name)
-        for ch_id, ch_name in CHANNELS
+        executor.submit(check_channel, ch_slug, ch_name): (ch_slug, ch_name)
+        for ch_slug, ch_name in CHANNELS
     }
     
     print(f"Submitted {len(futures)} channel checks...")
     
     # Collect new videos and spawn processing tasks
     for future in as_completed(futures):
-        ch_id, ch_name = futures[future]
+        ch_slug, ch_name = futures[future]
         try:
             new_videos = future.result()
             if new_videos:
-                for video_id, channel_id, channel_name, published_at in new_videos:
+                for video_id, channel_slug, channel_name, published_at in new_videos:
                     # Process in background - don't block other channels
-                    executor.submit(process_video, video_id, channel_id, channel_name, published_at)
+                    executor.submit(process_video, video_id, channel_slug, channel_name, published_at)
                     print(f"[{channel_name}] Spawned background task for {video_id}")
         except Exception as e:
             print(f"[{ch_name}] Channel check failed: {e}", file=sys.stderr)
