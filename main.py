@@ -297,11 +297,20 @@ def check_new_videos():
 
 
 def check_active_videos():
-    """Check active videos for title changes (hourly task)."""
+    """Check active videos for title changes (hourly task).
+    
+    Only checks videos that are still "active" (title changed in last N days).
+    Videos with same single title for N days straight are skipped.
+    """
     print(f"\n=== Checking active videos at {datetime.now()} ===")
     
-    active_videos = get_active_videos()
-    print(f"Found {len(active_videos)} active videos to check")
+    all_videos = get_active_videos()
+    
+    # Filter to only truly active videos (not stagnated)
+    active_videos = [v for v in all_videos if is_video_active(v["video_id"], INACTIVE_DAYS_THRESHOLD)]
+    stagnated_count = len(all_videos) - len(active_videos)
+    
+    print(f"Found {len(active_videos)} active videos to check ({stagnated_count} stagnated, skipped)")
     
     for video_info in active_videos:
         video_id = video_info["video_id"]
