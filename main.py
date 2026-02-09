@@ -231,16 +231,25 @@ def check_new_videos():
             
             if has_dates:
                 # RSS MODE: We have publish dates
-                # Only store/process videos AFTER cutoff date
-                # Always ensure at least 1 video stored (newest after cutoff) for HTTP fallback reference
+                # Find anchor (first known video) to know where to stop
+                # Only store/process videos AFTER cutoff date AND newer than anchor
+                
+                anchor_index = None
+                for i, (video_id, _) in enumerate(rss_videos):
+                    if video_id in known_ids:
+                        anchor_index = i
+                        break
+                
+                # Only consider videos before anchor (newer)
+                candidates = rss_videos[:anchor_index] if anchor_index is not None else rss_videos
                 
                 processed_count = 0
-                for video_id, published_at in rss_videos:
+                for video_id, published_at in candidates:
                     # Skip if before cutoff - don't store at all
                     if published_at.date() < CUTOFF_DATE:
                         continue
                     
-                    # Skip if already known
+                    # Skip if already known (shouldn't happen with anchor, but safety check)
                     if video_id in known_ids:
                         continue
                     
@@ -256,9 +265,9 @@ def check_new_videos():
                         processed_count += 1
                         print(f"[{channel_name}] NEW VIDEO: {video_id} (published {published_at.date()})")
                 
-                # Ensure at least 1 video exists for this channel (for HTTP fallback anchor)
+                # First run: ensure at least 1 video exists for HTTP fallback anchor
                 if not known_ids and processed_count == 0:
-                    # No videos after cutoff and no known videos - store the newest one as reference
+                    # No videos after cutoff - store the newest one as reference
                     newest_id, newest_date = rss_videos[0]
                     if not is_short(newest_id):
                         add_video(newest_id, channel_slug, newest_date, is_short=False)
