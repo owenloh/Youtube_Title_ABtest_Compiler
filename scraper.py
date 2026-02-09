@@ -1,12 +1,14 @@
-"""Fetch videos from channel RSS and scrape titles from watch pages (no account)."""
+"""Fetch videos from channel using YouTube Data API and scrape titles from watch pages."""
 import re
 import time
 from datetime import datetime
 from typing import List, Optional, Tuple
-import xml.etree.ElementTree as ET
 import requests
 
-RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+from youtube_comment import get_credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
 SHORTS_URL = "https://www.youtube.com/shorts/{video_id}"
 
@@ -18,81 +20,67 @@ HEADERS = {
 }
 
 
-def get_videos_from_rss(channel_id: str, max_videos: int = 50, max_retries: int = 3) -> List[Tuple[str, datetime]]:
+def get_videos_from_channel(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
     """
-    Get videos from channel RSS feed with retry logic.
+    Get videos from channel using YouTube Data API.
     Returns: [(video_id, published_at), ...] ordered newest first.
     
-    Why RSS over API?
-    - RSS is free, no API quota/keys needed
-    - RSS is faster: single HTTP request gets all recent videos
-    - RSS is perfect for "tell me when a channel posts a new video"
-    - API would require multiple calls and quota management
-    - RSS feed is public and doesn't require authentication
+    Uses playlistItems.list on the channel's uploads playlist.
+    Cost: ~3 quota units per call (1 for channels.list + 1-2 for playlistItems.list)
     """
-    url = RSS_URL.format(channel_id=channel_id)
-    
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            # Add small delay between retries
-            if attempt > 0:
-                time.sleep(2 ** attempt)  # 2s, 4s backoff
-            
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            r.raise_for_status()
-            root = ET.fromstring(r.text)
-            break  # Success, exit retry loop
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response.status_code == 404 and attempt < max_retries - 1:
-                print(f"RSS 404 for {channel_id}, retry {attempt + 1}/{max_retries}...")
-                continue
-            raise
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                continue
-            raise
-    else:
-        # All retries failed
-        if last_error:
-            raise last_error
+    creds = get_credentials()
+    if not creds:
+        print(f"No credentials available for API call")
         return []
     
-    ns = {"yt": "http://www.youtube.com/xml/schemas/2015", "atom": "http://www.w3.org/2005/Atom"}
-    entries = root.findall(".//atom:entry", namespaces=ns)
-    if not entries:
-        entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+    youtube = build("youtube", "v3", credentials=creds)
     
-    videos = []
-    for entry in entries[:max_videos]:
-        # Get video ID
-        video_id_elem = entry.find(".//yt:videoId", namespaces=ns)
-        if video_id_elem is None:
-            video_id_elem = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId")
-        if video_id_elem is None:
-            continue
+    try:
+        # Get the uploads playlist ID (it's "UU" + channel_id without "UC" prefix)
+        # e.g., UCHnyfMqiRRG1u-2MsSQLbXA -> UUHnyfMqiRRG1u-2MsSQLbXA
+        uploads_playlist_id = "UU" + channel_id[2:]
         
-        video_id = (video_id_elem.text or "").strip()
-        if not video_id:
-            continue
+        # Get videos from uploads playlist
+        videos = []
+        next_page_token = None
         
-        # Get published date
-        published_elem = entry.find(".//atom:published", namespaces=ns)
-        if published_elem is None:
-            published_elem = entry.find(".//{http://www.w3.org/2005/Atom}published")
+        while len(videos) < max_videos:
+            request = youtube.playlistItems().list(
+                part="snippet",
+                playlistId=uploads_playlist_id,
+                maxResults=min(50, max_videos - len(videos)),
+                pageToken=next_page_token
+            )
+            response = request.execute()
+            
+            for item in response.get("items", []):
+                snippet = item.get("snippet", {})
+                video_id = snippet.get("resourceId", {}).get("videoId")
+                published_str = snippet.get("publishedAt")
+                
+                if video_id and published_str:
+                    try:
+                        published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
+                        videos.append((video_id, published_at))
+                    except (ValueError, AttributeError):
+                        continue
+            
+            next_page_token = response.get("nextPageToken")
+            if not next_page_token:
+                break
         
-        if published_elem is not None and published_elem.text:
-            try:
-                # Parse ISO 8601 format: 2026-02-08T12:00:00+00:00
-                published_str = published_elem.text.strip()
-                published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
-                videos.append((video_id, published_at))
-            except (ValueError, AttributeError):
-                continue
-    
-    return videos
+        return videos
+        
+    except HttpError as e:
+        print(f"YouTube API error for channel {channel_id}: {e}")
+        return []
+    except Exception as e:
+        print(f"Error fetching videos for channel {channel_id}: {e}")
+        return []
+
+
+# Keep old function name as alias for compatibility
+get_videos_from_rss = get_videos_from_channel
 
 
 def is_short(video_id: str) -> bool:
