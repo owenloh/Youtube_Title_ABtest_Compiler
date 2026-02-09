@@ -1,0 +1,474 @@
+"""PostgreSQL storage for channels, videos, title samples, and comments."""
+import os
+from datetime import date, datetime
+from typing import List, Optional, Tuple
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
+
+from config import DATABASE_URL
+
+# Connection pool (min 1, max 5 connections)
+_pool: Optional[SimpleConnectionPool] = None
+
+
+def get_pool():
+    """Get or create connection pool."""
+    global _pool
+    if _pool is None:
+        if not DATABASE_URL:
+            raise ValueError("DATABASE_URL not set")
+        _pool = SimpleConnectionPool(1, 5, DATABASE_URL)
+    return _pool
+
+
+def get_conn():
+    """Get a connection from the pool."""
+    pool = get_pool()
+    return pool.getconn()
+
+
+def return_conn(conn):
+    """Return connection to the pool."""
+    pool = get_pool()
+    pool.putconn(conn)
+
+
+def init_db():
+    """Initialize database schema."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    channel_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS videos (
+                    video_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL REFERENCES channels(channel_id),
+                    published_at TIMESTAMP NOT NULL,
+                    is_short BOOLEAN DEFAULT FALSE,
+                    is_ignored BOOLEAN DEFAULT FALSE,
+                    is_deleted BOOLEAN DEFAULT FALSE,
+                    comment_id TEXT,
+                    comment_posted_at TIMESTAMP,
+                    comment_last_edited_at TIMESTAMP,
+                    last_checked_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS title_samples (
+                    id SERIAL PRIMARY KEY,
+                    video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+                    title_text TEXT NOT NULL,
+                    sampled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS title_history (
+                    id SERIAL PRIMARY KEY,
+                    video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+                    title_text TEXT NOT NULL,
+                    first_seen_date DATE NOT NULL,
+                    last_seen_date DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_id, title_text, first_seen_date)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id);
+                CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at);
+                CREATE INDEX IF NOT EXISTS idx_videos_ignored ON videos(is_ignored);
+                CREATE INDEX IF NOT EXISTS idx_title_samples_video ON title_samples(video_id);
+                CREATE INDEX IF NOT EXISTS idx_title_samples_at ON title_samples(sampled_at);
+                CREATE INDEX IF NOT EXISTS idx_title_history_video ON title_history(video_id);
+                CREATE INDEX IF NOT EXISTS idx_title_history_date ON title_history(first_seen_date);
+            """)
+            
+            # Migration: add is_deleted column if it doesn't exist (for existing databases)
+            cur.execute("""
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='videos' AND column_name='is_deleted'
+                    ) THEN
+                        ALTER TABLE videos ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE;
+                    END IF;
+                END $$;
+            """)
+            
+            # Create index for is_deleted (safe to run even if column already exists)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_deleted ON videos(is_deleted)")
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def add_channel(channel_id: str, display_name: str):
+    """Add or update a channel."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO channels (channel_id, display_name) VALUES (%s, %s) "
+                "ON CONFLICT (channel_id) DO UPDATE SET display_name = EXCLUDED.display_name",
+                (channel_id, display_name),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def video_exists(video_id: str) -> bool:
+    """Check if video exists in database."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM videos WHERE video_id = %s", (video_id,))
+            return cur.fetchone() is not None
+    finally:
+        return_conn(conn)
+
+
+def get_latest_video_id_for_channel(channel_id: str) -> Optional[str]:
+    """Get the most recent video ID for a channel (by published_at)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id FROM videos WHERE channel_id = %s ORDER BY published_at DESC LIMIT 1",
+                (channel_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        return_conn(conn)
+
+
+def get_known_video_ids_for_channel(channel_id: str, limit: int = 50) -> List[str]:
+    """Get known video IDs for a channel, newest first (for slice anchoring)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT video_id FROM videos WHERE channel_id = %s ORDER BY published_at DESC LIMIT %s",
+                (channel_id, limit),
+            )
+            return [row[0] for row in cur.fetchall()]
+    finally:
+        return_conn(conn)
+
+
+def add_video(
+    video_id: str,
+    channel_id: str,
+    published_at: datetime,
+    is_short: bool = False,
+) -> bool:
+    """Add a new video. Returns True if added, False if already exists."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO videos (video_id, channel_id, published_at, is_short) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
+                (video_id, channel_id, published_at, is_short),
+            )
+            added = cur.rowcount > 0
+        conn.commit()
+        return added
+    finally:
+        return_conn(conn)
+
+
+def add_title_sample(video_id: str, title: str):
+    """Add a title sample for a video."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO title_samples (video_id, title_text) VALUES (%s, %s)",
+                (video_id, title),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def get_title_stats(video_id: str) -> List[Tuple[str, int]]:
+    """Get title statistics: [(title, count), ...] ordered by count desc."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT title_text, COUNT(*) as count "
+                "FROM title_samples WHERE video_id = %s "
+                "GROUP BY title_text ORDER BY count DESC",
+                (video_id,),
+            )
+            return [(r["title_text"], r["count"]) for r in cur.fetchall()]
+    finally:
+        return_conn(conn)
+
+
+def get_total_samples(video_id: str) -> int:
+    """Get total number of samples for a video."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM title_samples WHERE video_id = %s",
+                (video_id,),
+            )
+            return cur.fetchone()[0] or 0
+    finally:
+        return_conn(conn)
+
+
+def get_comment_id(video_id: str) -> Optional[str]:
+    """Get comment ID for a video."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT comment_id FROM videos WHERE video_id = %s AND comment_id IS NOT NULL",
+                (video_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        return_conn(conn)
+
+
+def set_comment_id(video_id: str, comment_id: str):
+    """Set comment ID for a video."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET comment_id = %s, comment_posted_at = CURRENT_TIMESTAMP "
+                "WHERE video_id = %s",
+                (comment_id, video_id),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def update_comment_edited(video_id: str):
+    """Mark comment as edited."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET comment_last_edited_at = CURRENT_TIMESTAMP WHERE video_id = %s",
+                (video_id,),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def mark_video_ignored(video_id: str):
+    """Mark video as ignored (comment was deleted)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET is_ignored = TRUE WHERE video_id = %s",
+                (video_id,),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def mark_video_deleted(video_id: str):
+    """Mark video as deleted (not found in RSS feed)."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET is_deleted = TRUE WHERE video_id = %s",
+                (video_id,),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def update_last_checked(video_id: str):
+    """Update last checked timestamp."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE videos SET last_checked_at = CURRENT_TIMESTAMP WHERE video_id = %s",
+                (video_id,),
+            )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def get_active_videos() -> List[dict]:
+    """Get all active videos (not ignored, not shorts, not deleted) for hourly checks."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT video_id, channel_id, published_at, comment_id "
+                "FROM videos "
+                "WHERE is_ignored = FALSE AND is_short = FALSE AND is_deleted = FALSE AND comment_id IS NOT NULL "
+                "ORDER BY published_at DESC"
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        return_conn(conn)
+
+
+def get_title_history_by_date(video_id: str) -> List[Tuple[date, List[str]]]:
+    """Get title history grouped by first_seen_date: [(date, [titles]), ...]."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT first_seen_date, title_text "
+                "FROM title_history WHERE video_id = %s "
+                "ORDER BY first_seen_date DESC, title_text",
+                (video_id,),
+            )
+            rows = cur.fetchall()
+            # Group by date
+            history = {}
+            for row_date, title in rows:
+                if row_date not in history:
+                    history[row_date] = []
+                history[row_date].append(title)
+            return sorted(history.items(), key=lambda x: x[0], reverse=True)
+    finally:
+        return_conn(conn)
+
+
+def update_title_history(video_id: str, unique_titles: List[str], check_date: date):
+    """Update title history: record which titles were seen on which dates."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            for title in unique_titles:
+                # Check if this title was already recorded for this date
+                cur.execute(
+                    "SELECT id FROM title_history "
+                    "WHERE video_id = %s AND title_text = %s AND first_seen_date = %s",
+                    (video_id, title, check_date),
+                )
+                if not cur.fetchone():
+                    # New title for this date, or update last_seen_date
+                    cur.execute(
+                        "INSERT INTO title_history (video_id, title_text, first_seen_date, last_seen_date) "
+                        "VALUES (%s, %s, %s, %s) "
+                        "ON CONFLICT (video_id, title_text, first_seen_date) "
+                        "DO UPDATE SET last_seen_date = EXCLUDED.last_seen_date",
+                        (video_id, title, check_date, check_date),
+                    )
+        conn.commit()
+    finally:
+        return_conn(conn)
+
+
+def get_unique_titles_for_date(video_id: str, check_date: date) -> set:
+    """Get unique titles seen on a specific date."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT title_text FROM title_samples "
+                "WHERE video_id = %s AND DATE(sampled_at) = %s",
+                (video_id, check_date),
+            )
+            return {row[0] for row in cur.fetchall()}
+    finally:
+        return_conn(conn)
+
+
+def is_video_active(video_id: str, inactive_days: int) -> bool:
+    """
+    Check if video is active.
+    Non-active if: same single title for N days straight.
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Get distinct titles per day for last N days
+            cur.execute(
+                """
+                SELECT DATE(sampled_at) as sample_date, COUNT(DISTINCT title_text) as title_count
+                FROM title_samples
+                WHERE video_id = %s
+                  AND sampled_at >= CURRENT_DATE - INTERVAL '%s days'
+                GROUP BY DATE(sampled_at)
+                ORDER BY sample_date DESC
+                LIMIT %s
+                """,
+                (video_id, inactive_days, inactive_days),
+            )
+            rows = cur.fetchall()
+            if len(rows) < inactive_days:
+                return True  # Not enough data
+            
+            # Check if all last N days have exactly 1 title
+            return not all(row[1] == 1 for row in rows)
+    finally:
+        return_conn(conn)
+
+
+def get_video_info(video_id: str) -> Optional[dict]:
+    """Get full video info for dashboard."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT v.*, c.display_name as channel_name,
+                       COUNT(DISTINCT ts.title_text) as unique_titles,
+                       COUNT(ts.id) as total_samples
+                FROM videos v
+                JOIN channels c ON v.channel_id = c.channel_id
+                LEFT JOIN title_samples ts ON v.video_id = ts.video_id
+                WHERE v.video_id = %s
+                GROUP BY v.video_id, c.display_name
+                """,
+                (video_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        return_conn(conn)
+
+
+def get_all_videos_summary() -> List[dict]:
+    """Get summary of all videos for dashboard."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT v.video_id, v.channel_id, c.display_name as channel_name,
+                       v.published_at, v.is_short, v.is_ignored, v.is_deleted,
+                       v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
+                       v.last_checked_at,
+                       COUNT(DISTINCT ts.title_text) as unique_titles,
+                       COUNT(ts.id) as total_samples
+                FROM videos v
+                JOIN channels c ON v.channel_id = c.channel_id
+                LEFT JOIN title_samples ts ON v.video_id = ts.video_id
+                GROUP BY v.video_id, c.display_name
+                ORDER BY v.published_at DESC
+                """,
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        return_conn(conn)
