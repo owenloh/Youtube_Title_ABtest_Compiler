@@ -260,13 +260,22 @@ def check_new_videos():
         for ch_id, ch_name in CHANNELS
     }
     
+    print(f"Submitted {len(futures)} channel checks...")
+    
     # Collect new videos and spawn processing tasks
     for future in as_completed(futures):
-        new_videos = future.result()
-        for video_id, channel_id, channel_name, published_at in new_videos:
-            # Process in background - don't block other channels
-            executor.submit(process_video, video_id, channel_id, channel_name, published_at)
-            print(f"[{channel_name}] Spawned background task for {video_id}")
+        ch_id, ch_name = futures[future]
+        try:
+            new_videos = future.result()
+            if new_videos:
+                for video_id, channel_id, channel_name, published_at in new_videos:
+                    # Process in background - don't block other channels
+                    executor.submit(process_video, video_id, channel_id, channel_name, published_at)
+                    print(f"[{channel_name}] Spawned background task for {video_id}")
+        except Exception as e:
+            print(f"[{ch_name}] Channel check failed: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
 
 
 def check_active_videos():
