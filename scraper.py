@@ -103,8 +103,13 @@ def _get_videos_from_api(channel_id: str, max_videos: int = 50) -> List[Tuple[st
     return videos
 
 
-def _get_videos_from_channel_page(channel_id: str, max_videos: int = 30) -> List[Tuple[str, datetime]]:
-    """Fallback: Scrape channel page directly (free, no API)."""
+def _get_videos_from_channel_page(channel_id: str, max_videos: int = 15) -> List[Tuple[str, datetime]]:
+    """Fallback: Scrape channel page directly (free, no API).
+    
+    NOTE: This method doesn't get publish dates, so we return None for dates.
+    The caller must handle this - only use for detecting NEW videos by comparing
+    against known IDs, not for date filtering.
+    """
     url = f"https://www.youtube.com/channel/{channel_id}/videos"
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -124,10 +129,8 @@ def _get_videos_from_channel_page(channel_id: str, max_videos: int = 30) -> List
                 if len(unique_ids) >= max_videos:
                     break
         
-        # We don't get publish dates from this method, use current time as approximation
-        # This is fine for "is this video new?" checks since we compare against known IDs
-        now = datetime.now()
-        return [(vid, now) for vid in unique_ids]
+        # Return None for publish date - caller must handle this
+        return [(vid, None) for vid in unique_ids]
     
     except Exception as e:
         print(f"Channel page scrape failed for {channel_id}: {e}")
