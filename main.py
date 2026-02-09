@@ -53,31 +53,42 @@ def build_comment_text(video_id: str, is_finalized: bool = False) -> str:
     
     lines = [COMMENT_DESCRIPTION, ""]
     
-    if is_finalized:
-        lines.append(f"Probable finalized titles (since {CUTOFF_DATE.strftime('%d %b %Y')}):")
-    else:
-        lines.append(f"Latest video titles ({date.today().strftime('%d %b %Y')}):")
-    
-    lines.append("")
-    
     # If no history, get current titles from stats
     if not history:
         stats = get_title_stats(video_id)
         if stats:
+            lines.append("Titles observed:")
             for i, (title, _) in enumerate(stats, 1):
                 short = (title[:80] + "...") if len(title) > 80 else title
                 lines.append(f"{i}. {short}")
         else:
             lines.append("(No data yet)")
-    else:
-        # Group by date
-        for hist_date, titles in history:
-            date_str = hist_date.strftime("%d %b %Y")
-            lines.append(f"Video titles as of {date_str}:")
+    elif len(history) == 1:
+        # Single date - simple format
+        hist_date, titles = history[0]
+        if len(titles) == 1:
+            lines.append(f"Title: {titles[0]}")
+        else:
+            lines.append("Titles observed:")
             for i, title in enumerate(titles, 1):
                 short = (title[:80] + "...") if len(title) > 80 else title
                 lines.append(f"{i}. {short}")
-            lines.append("")
+    else:
+        # Multiple dates - show history
+        if is_finalized:
+            lines.append("Title history:")
+        else:
+            lines.append("Title changes detected:")
+        lines.append("")
+        for hist_date, titles in history:
+            date_str = hist_date.strftime("%d %b")
+            if len(titles) == 1:
+                lines.append(f"{date_str}: {titles[0]}")
+            else:
+                lines.append(f"{date_str}:")
+                for i, title in enumerate(titles, 1):
+                    short = (title[:80] + "...") if len(title) > 80 else title
+                    lines.append(f"  {i}. {short}")
     
     return "\n".join(lines).strip()
 
