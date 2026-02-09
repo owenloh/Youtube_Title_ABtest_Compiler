@@ -267,7 +267,7 @@ def check_new_videos():
                         continue
                     
                     # Store and process long-form video
-                    if add_video(video_id, channel_slug, published_at, is_short=False):
+                    if add_video(video_id, channel_slug, published_at):
                         new_videos.append((video_id, channel_slug, channel_name, published_at))
                         processed_count += 1
                         print(f"[{channel_name}] NEW VIDEO: {video_id} (published {published_at.date()})")
@@ -276,7 +276,7 @@ def check_new_videos():
                 if not known_ids and processed_count == 0:
                     # No videos after cutoff - store newest long-form as anchor (inactive)
                     vid_id, vid_date = long_form_videos[0]
-                    add_video(vid_id, channel_slug, vid_date, is_short=False, is_active=False)
+                    add_video(vid_id, channel_slug, vid_date, is_active=False)
                     print(f"[{channel_name}] Stored {vid_id} as anchor (inactive, no videos after cutoff)")
             
             else:
@@ -296,14 +296,14 @@ def check_new_videos():
                         if video_id in known_ids:
                             continue
                         
-                        if add_video(video_id, channel_slug, datetime.now(), is_short=False):
+                        if add_video(video_id, channel_slug, datetime.now()):
                             new_videos.append((video_id, channel_slug, channel_name, datetime.now()))
                             print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
                     # No anchor - first run via HTTP
                     # Store first video as anchor (active - will be processed)
                     vid_id, _ = rss_videos[0]
-                    add_video(vid_id, channel_slug, datetime.now(), is_short=False, is_active=True)
+                    add_video(vid_id, channel_slug, datetime.now(), is_active=True)
                     new_videos.append((vid_id, channel_slug, channel_name, datetime.now()))
                     print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor (active)")
         

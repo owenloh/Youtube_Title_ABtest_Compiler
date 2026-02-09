@@ -51,7 +51,6 @@ def init_db():
                     video_id TEXT PRIMARY KEY,
                     channel_id TEXT NOT NULL REFERENCES channels(channel_id),
                     published_at TIMESTAMP NOT NULL,
-                    is_short BOOLEAN DEFAULT FALSE,
                     is_ignored BOOLEAN DEFAULT FALSE,
                     is_deleted BOOLEAN DEFAULT FALSE,
                     is_active BOOLEAN DEFAULT TRUE,
@@ -181,7 +180,6 @@ def add_video(
     video_id: str,
     channel_id: str,
     published_at: datetime,
-    is_short: bool = False,
     is_active: bool = True,
 ) -> bool:
     """Add a new video. Returns True if added, False if already exists.
@@ -193,9 +191,9 @@ def add_video(
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO videos (video_id, channel_id, published_at, is_short, is_active) "
-                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
-                (video_id, channel_id, published_at, is_short, is_active),
+                "INSERT INTO videos (video_id, channel_id, published_at, is_active) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
+                (video_id, channel_id, published_at, is_active),
             )
             added = cur.rowcount > 0
         conn.commit()
@@ -359,7 +357,7 @@ def get_active_videos() -> List[dict]:
             cur.execute(
                 "SELECT video_id, channel_id, published_at, comment_id "
                 "FROM videos "
-                "WHERE is_active = TRUE AND is_ignored = FALSE AND is_short = FALSE AND is_deleted = FALSE AND comment_id IS NOT NULL "
+                "WHERE is_active = TRUE AND is_ignored = FALSE AND is_deleted = FALSE AND comment_id IS NOT NULL "
                 "ORDER BY published_at DESC"
             )
             return [dict(row) for row in cur.fetchall()]
@@ -494,7 +492,7 @@ def get_all_videos_summary() -> List[dict]:
             cur.execute(
                 """
                 SELECT v.video_id, v.channel_id, c.display_name as channel_name,
-                       v.published_at, v.is_short, v.is_ignored, v.is_deleted, v.is_active,
+                       v.published_at, v.is_ignored, v.is_deleted, v.is_active,
                        v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
                        v.last_checked_at,
                        COUNT(DISTINCT ts.title_text) as unique_titles,
