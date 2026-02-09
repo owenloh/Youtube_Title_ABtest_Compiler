@@ -9,7 +9,7 @@ from psycopg2.pool import SimpleConnectionPool
 
 from config import DATABASE_URL
 
-# Connection pool (min 1, max 5 connections)
+# Connection pool (min 1, max 20 connections)
 _pool: Optional[SimpleConnectionPool] = None
 
 
@@ -19,7 +19,7 @@ def get_pool():
     if _pool is None:
         if not DATABASE_URL:
             raise ValueError("DATABASE_URL not set")
-        _pool = SimpleConnectionPool(1, 5, DATABASE_URL)
+        _pool = SimpleConnectionPool(1, 20, DATABASE_URL)
     return _pool
 
 
