@@ -72,11 +72,7 @@
         <div class="stats" id="stats"></div>
         
         <div class="filters">
-            <button class="active" onclick="filterVideos('all')">All</button>
-            <button onclick="filterVideos('active')">Active</button>
-            <button onclick="filterVideos('ignored')">Ignored</button>
-            <button onclick="filterVideos('deleted')">Deleted</button>
-            <button onclick="filterVideos('shorts')">Shorts</button>
+            <button class="active" onclick="filterVideos('all')">All Tracked</button>
         </div>
         
         <div id="loading" class="loading">Loading...</div>
@@ -86,11 +82,10 @@
                     <th>Video ID</th>
                     <th>Channel</th>
                     <th>Published</th>
-                    <th>Status</th>
                     <th>Unique Titles</th>
                     <th>Total Samples</th>
+                    <th>Comment</th>
                     <th>Comment Posted</th>
-                    <th>Last Edited</th>
                     <th>Last Checked</th>
                 </tr>
             </thead>
@@ -102,7 +97,6 @@
         const API_URL = '';  // Same origin - Flask serves both dashboard and API
         
         let allVideos = [];
-        let currentFilter = 'all';
 
         async function loadData() {
             try {
@@ -131,28 +125,20 @@
         function displayStats(stats) {
             const statsHtml = `
                 <div class="stat-card">
-                    <h3>Total Videos</h3>
-                    <div class="value">${stats.total_videos || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Active Videos</h3>
-                    <div class="value">${stats.active_videos || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Ignored Videos</h3>
-                    <div class="value">${stats.ignored_videos || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Deleted Videos</h3>
-                    <div class="value">${stats.deleted_videos || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Shorts</h3>
-                    <div class="value">${stats.shorts || 0}</div>
+                    <h3>Tracked Videos</h3>
+                    <div class="value">${stats.tracked_videos || 0}</div>
                 </div>
                 <div class="stat-card">
                     <h3>With Comments</h3>
                     <div class="value">${stats.videos_with_comments || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Anchor Videos</h3>
+                    <div class="value">${stats.anchor_videos || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total in DB</h3>
+                    <div class="value">${stats.total_in_db || 0}</div>
                 </div>
             `;
             document.getElementById('stats').innerHTML = statsHtml;
@@ -180,24 +166,19 @@
         function displayVideos(videos) {
             const tbody = document.getElementById('videos-body');
             tbody.innerHTML = videos.map(video => {
-                const status = video.is_deleted ? '<span class="badge deleted">Deleted</span>' :
-                              video.is_ignored ? '<span class="badge ignored">Ignored</span>' :
-                              video.is_short ? '<span class="badge short">Short</span>' :
-                              '<span class="badge active">Active</span>';
-                
                 const videoUrl = `https://www.youtube.com/watch?v=${video.video_id}`;
                 const commentUrl = video.comment_id ? `https://www.youtube.com/watch?v=${video.video_id}&lc=${video.comment_id}` : '';
+                const commentLink = video.comment_id ? `<a href="${commentUrl}" target="_blank">View</a>` : '-';
                 
                 return `
                     <tr>
                         <td><a href="${videoUrl}" target="_blank">${video.video_id}</a></td>
                         <td>${video.channel_name || video.channel_id}</td>
                         <td>${formatDate(video.published_at)}</td>
-                        <td>${status}</td>
                         <td>${video.unique_titles || 0}</td>
                         <td>${video.total_samples || 0}</td>
+                        <td>${commentLink}</td>
                         <td>${video.comment_posted_at ? formatDate(video.comment_posted_at) : '-'}</td>
-                        <td>${video.comment_last_edited_at ? formatDate(video.comment_last_edited_at) : '-'}</td>
                         <td>${video.last_checked_at ? formatDate(video.last_checked_at) : '-'}</td>
                     </tr>
                 `;
