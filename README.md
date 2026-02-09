@@ -72,7 +72,8 @@ Dashboard available at your Railway public URL.
 | `CUTOFF_DATE` | No | 2026-02-08 | Only process videos after this date |
 | `NEW_VIDEO_CHECK_INTERVAL` | No | 180 | Seconds between new video checks |
 | `ACTIVE_VIDEO_CHECK_INTERVAL` | No | 3600 | Seconds between active video checks |
-| `SAMPLES_PER_RUN` | No | 21 | Title samples per check |
+| `SAMPLES_PER_RUN` | No | 21 | Total title samples per video |
+| `FAST_SAMPLES` | No | 5 | Quick samples before posting comment |
 | `INACTIVE_DAYS_THRESHOLD` | No | 5 | Days of same title = finalized |
 | `SKIP_COMMENT` | No | 0 | Set to 1 to disable commenting |
 

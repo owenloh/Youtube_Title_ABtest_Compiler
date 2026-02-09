@@ -14,6 +14,7 @@ from config import (
     CHANNELS,
     COMMENT_INTROS,
     CUTOFF_DATE,
+    FAST_SAMPLES,
     INACTIVE_DAYS_THRESHOLD,
     NEW_VIDEO_CHECK_INTERVAL,
     SAMPLES_PER_RUN,
@@ -113,9 +114,9 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
     existing_comment = get_comment_id(video_id)
     
     if fast_first and not existing_comment and not SKIP_COMMENT:
-        # FAST PATH: Get 5 samples in parallel, post comment ASAP
+        # FAST PATH: Get quick samples in parallel, post comment ASAP
         try:
-            quick_titles = sample_titles(video_id, 5, parallel=True)
+            quick_titles = sample_titles(video_id, FAST_SAMPLES, parallel=True)
         except Exception as e:
             print(f"[{channel_name}] ERROR sampling titles for {video_id}: {e}", flush=True)
             quick_titles = []
@@ -141,7 +142,7 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
                 print(f"[{channel_name}] ERROR posting comment for {video_id}: {e}", flush=True)
         
         # Continue with more samples in background (sequential to be gentle)
-        remaining_samples = SAMPLES_PER_RUN - 5
+        remaining_samples = SAMPLES_PER_RUN - FAST_SAMPLES
         if remaining_samples > 0:
             titles = sample_titles(video_id, remaining_samples)
             if titles:
