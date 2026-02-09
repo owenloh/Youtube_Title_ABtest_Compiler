@@ -168,15 +168,14 @@ def is_short(video_id: str) -> bool:
     """
     try:
         # Method 1: Try HEAD request to shorts URL (lightest check)
-        # If video is accessible via /shorts/ URL, it's a Short
+        # If video is a Short, /shorts/{id} stays as /shorts/{id}
+        # If video is long-form, /shorts/{id} redirects to /watch?v={id}
         shorts_url = SHORTS_URL.format(video_id=video_id)
         r_head = requests.head(shorts_url, headers=HEADERS, timeout=5, allow_redirects=True)
         if r_head.ok:
-            # Check if final URL contains /shorts/ (even after redirects)
+            # Check if FINAL URL (after redirects) still contains /shorts/
+            # Long-form videos redirect to /watch?v=, Shorts stay at /shorts/
             if '/shorts/' in r_head.url.lower():
-                return True
-            # If HEAD returns 200 and URL is still /shorts/, it's a Short
-            if '/shorts/' in shorts_url.lower() and r_head.status_code == 200:
                 return True
         
         # Method 2: Check og:url meta tag from watch page (partial fetch, often cached)

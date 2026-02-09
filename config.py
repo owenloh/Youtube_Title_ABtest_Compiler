@@ -40,7 +40,7 @@ ACTIVE_VIDEO_CHECK_INTERVAL = int(os.environ.get("ACTIVE_VIDEO_CHECK_INTERVAL", 
 
 # Title sampling
 SAMPLES_PER_RUN = int(os.environ.get("SAMPLES_PER_RUN", "20"))
-MIN_SAMPLES_TO_POST = int(os.environ.get("MIN_SAMPLES_TO_POST", "3"))
+MIN_SAMPLES_TO_POST = int(os.environ.get("MIN_SAMPLES_TO_POST", "20"))
 
 # Active/non-active logic: non-active if N days straight same single title
 INACTIVE_DAYS_THRESHOLD = int(os.environ.get("INACTIVE_DAYS_THRESHOLD", "5"))
