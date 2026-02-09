@@ -1,14 +1,16 @@
-"""Fetch videos from channel using YouTube Data API and scrape titles from watch pages."""
+"""Fetch videos from channel using RSS (primary) with YouTube Data API fallback."""
 import re
 import time
 from datetime import datetime
 from typing import List, Optional, Tuple
+import xml.etree.ElementTree as ET
 import requests
 
 from youtube_comment import get_credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
 SHORTS_URL = "https://www.youtube.com/shorts/{video_id}"
 
@@ -20,67 +22,112 @@ HEADERS = {
 }
 
 
-def get_videos_from_channel(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
-    """
-    Get videos from channel using YouTube Data API.
-    Returns: [(video_id, published_at), ...] ordered newest first.
+def _get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
+    """Try RSS feed first (free, no quota)."""
+    url = RSS_URL.format(channel_id=channel_id)
+    r = requests.get(url, headers=HEADERS, timeout=15)
+    r.raise_for_status()
+    root = ET.fromstring(r.text)
     
-    Uses playlistItems.list on the channel's uploads playlist.
-    Cost: ~3 quota units per call (1 for channels.list + 1-2 for playlistItems.list)
-    """
+    ns = {"yt": "http://www.youtube.com/xml/schemas/2015", "atom": "http://www.w3.org/2005/Atom"}
+    entries = root.findall(".//atom:entry", namespaces=ns)
+    if not entries:
+        entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+    
+    videos = []
+    for entry in entries[:max_videos]:
+        video_id_elem = entry.find(".//yt:videoId", namespaces=ns)
+        if video_id_elem is None:
+            video_id_elem = entry.find(".//{http://www.youtube.com/xml/schemas/2015}videoId")
+        if video_id_elem is None:
+            continue
+        
+        video_id = (video_id_elem.text or "").strip()
+        if not video_id:
+            continue
+        
+        published_elem = entry.find(".//atom:published", namespaces=ns)
+        if published_elem is None:
+            published_elem = entry.find(".//{http://www.w3.org/2005/Atom}published")
+        
+        if published_elem is not None and published_elem.text:
+            try:
+                published_str = published_elem.text.strip()
+                published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
+                videos.append((video_id, published_at))
+            except (ValueError, AttributeError):
+                continue
+    
+    return videos
+
+
+def _get_videos_from_api(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
+    """Fallback to YouTube Data API (costs quota)."""
     creds = get_credentials()
     if not creds:
-        print(f"No credentials available for API call")
         return []
     
     youtube = build("youtube", "v3", credentials=creds)
     
+    # Uploads playlist ID = "UU" + channel_id without "UC" prefix
+    uploads_playlist_id = "UU" + channel_id[2:]
+    
+    videos = []
+    next_page_token = None
+    
+    while len(videos) < max_videos:
+        request = youtube.playlistItems().list(
+            part="snippet",
+            playlistId=uploads_playlist_id,
+            maxResults=min(50, max_videos - len(videos)),
+            pageToken=next_page_token
+        )
+        response = request.execute()
+        
+        for item in response.get("items", []):
+            snippet = item.get("snippet", {})
+            video_id = snippet.get("resourceId", {}).get("videoId")
+            published_str = snippet.get("publishedAt")
+            
+            if video_id and published_str:
+                try:
+                    published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
+                    videos.append((video_id, published_at))
+                except (ValueError, AttributeError):
+                    continue
+        
+        next_page_token = response.get("nextPageToken")
+        if not next_page_token:
+            break
+    
+    return videos
+
+
+def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
+    """
+    Get videos from channel. Tries RSS first (free), falls back to API if RSS fails.
+    Returns: [(video_id, published_at), ...] ordered newest first.
+    """
+    # Try RSS first
     try:
-        # Get the uploads playlist ID (it's "UU" + channel_id without "UC" prefix)
-        # e.g., UCHnyfMqiRRG1u-2MsSQLbXA -> UUHnyfMqiRRG1u-2MsSQLbXA
-        uploads_playlist_id = "UU" + channel_id[2:]
-        
-        # Get videos from uploads playlist
-        videos = []
-        next_page_token = None
-        
-        while len(videos) < max_videos:
-            request = youtube.playlistItems().list(
-                part="snippet",
-                playlistId=uploads_playlist_id,
-                maxResults=min(50, max_videos - len(videos)),
-                pageToken=next_page_token
-            )
-            response = request.execute()
-            
-            for item in response.get("items", []):
-                snippet = item.get("snippet", {})
-                video_id = snippet.get("resourceId", {}).get("videoId")
-                published_str = snippet.get("publishedAt")
-                
-                if video_id and published_str:
-                    try:
-                        published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00"))
-                        videos.append((video_id, published_at))
-                    except (ValueError, AttributeError):
-                        continue
-            
-            next_page_token = response.get("nextPageToken")
-            if not next_page_token:
-                break
-        
-        return videos
-        
-    except HttpError as e:
-        print(f"YouTube API error for channel {channel_id}: {e}")
-        return []
+        videos = _get_videos_from_rss(channel_id, max_videos)
+        if videos:
+            return videos
     except Exception as e:
-        print(f"Error fetching videos for channel {channel_id}: {e}")
-        return []
-
-
-# Keep old function name as alias for compatibility
-get_videos_from_rss = get_videos_from_channel
+        print(f"RSS failed for {channel_id}: {e}, trying API...")
+    
+    # Fallback to API
+    try:
+        videos = _get_videos_from_api(channel_id, max_videos)
+        if videos:
+            print(f"API fallback succeeded for {channel_id}")
+            return videos
+    except HttpError as e:
+        print(f"API fallback failed for {channel_id}: {e}")
+    except Exception as e:
+        print(f"API fallback error for {channel_id}: {e}")
+    
+    return []
 
 
 def is_short(video_id: str) -> bool:

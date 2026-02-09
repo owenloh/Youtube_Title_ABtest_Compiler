@@ -35,7 +35,7 @@ except ValueError:
     CUTOFF_DATE = date(2026, 2, 8)  # Default: Feb 8, 2026
 
 # Polling intervals (in seconds)
-NEW_VIDEO_CHECK_INTERVAL = int(os.environ.get("NEW_VIDEO_CHECK_INTERVAL", "1800"))  # 30 minutes
+NEW_VIDEO_CHECK_INTERVAL = int(os.environ.get("NEW_VIDEO_CHECK_INTERVAL", "60"))  # 1 minute
 ACTIVE_VIDEO_CHECK_INTERVAL = int(os.environ.get("ACTIVE_VIDEO_CHECK_INTERVAL", "3600"))  # 1 hour
 
 # Title sampling
