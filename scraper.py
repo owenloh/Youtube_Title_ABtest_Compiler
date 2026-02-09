@@ -235,13 +235,29 @@ def get_video_title(video_id: str) -> Optional[str]:
     return None
 
 
-def sample_titles(video_id: str, count: int, delay: float = 1.5) -> List[str]:
-    """Fetch title `count` times (with small delay) to collect A/B samples."""
+def sample_titles(video_id: str, count: int, delay: float = 1.5, parallel: bool = False) -> List[str]:
+    """Fetch title `count` times to collect A/B samples.
+    
+    parallel=True: Fetch all at once (faster, but more aggressive)
+    parallel=False: Sequential with delay (slower, but gentler)
+    """
+    if parallel and count > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        seen = []
+        with ThreadPoolExecutor(max_workers=min(count, 10)) as ex:
+            futures = [ex.submit(get_video_title, video_id) for _ in range(count)]
+            for f in as_completed(futures):
+                title = f.result()
+                if title:
+                    seen.append(title)
+        return seen
+    
+    # Sequential
     seen = []
     for i in range(count):
         title = get_video_title(video_id)
         if title:
             seen.append(title)
-        if i < count - 1:  # Don't sleep after last sample
+        if i < count - 1:
             time.sleep(delay)
     return seen

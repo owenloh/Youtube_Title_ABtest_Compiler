@@ -94,9 +94,9 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
     existing_comment = get_comment_id(video_id)
     
     if fast_first and not existing_comment and not SKIP_COMMENT:
-        # FAST PATH: Get just 3 samples quickly, post comment ASAP
+        # FAST PATH: Get 5 samples in parallel, post comment ASAP
         print(f"[{channel_name}] Fast-posting comment for {video_id}...")
-        quick_titles = sample_titles(video_id, 3, delay=0.5)  # 3 samples, 0.5s delay = 1.5s total
+        quick_titles = sample_titles(video_id, 5, parallel=True)  # ~1-2s total
         
         if quick_titles:
             for title in quick_titles:
@@ -113,8 +113,8 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
             else:
                 print(f"[{channel_name}] Failed to post fast comment for {video_id}")
         
-        # Continue with more samples in background
-        remaining_samples = SAMPLES_PER_RUN - 3
+        # Continue with more samples in background (sequential to be gentle)
+        remaining_samples = SAMPLES_PER_RUN - 5
         if remaining_samples > 0:
             titles = sample_titles(video_id, remaining_samples)
             if titles:
@@ -127,11 +127,12 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
                 
                 # Update comment with full data
                 comment_id = get_comment_id(video_id)
-                if comment_id:
+                if comment_id and len(all_titles) > len(set(quick_titles)):
+                    # Only update if we found new titles
                     comment_text = build_comment_text(video_id, is_finalized=False)
                     if update_comment(comment_id, comment_text):
                         update_comment_edited(video_id)
-                        print(f"[{channel_name}] Updated comment with full samples for {video_id}")
+                        print(f"[{channel_name}] Updated comment with {len(all_titles)} unique titles for {video_id}")
         
         total = get_total_samples(video_id)
         print(f"[{channel_name}] Video {video_id}: {total} total samples, {len(set(quick_titles + (titles if 'titles' in dir() else [])))} unique titles")
