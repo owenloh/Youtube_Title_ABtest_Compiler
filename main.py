@@ -232,13 +232,11 @@ def check_new_videos():
                         # Don't store old videos without dates - we don't know when they were published
                         continue
                 elif published_at.date() < CUTOFF_DATE:
-                    # Video is before cutoff - skip entirely, don't store
-                    # We only need to track videos we're actively monitoring
-                    print(f"[{channel_name}] Skipping {video_id} (before cutoff: {published_at.date()})")
+                    # Video is before cutoff - store as anchor but don't process
+                    add_video(video_id, channel_id, published_at, is_short=False)
                     continue
                 
                 if is_short(video_id):
-                    print(f"[{channel_name}] Skipping {video_id} (is a Short)")
                     add_video(video_id, channel_id, published_at or datetime.now(), is_short=True)
                     continue
                 
@@ -247,7 +245,7 @@ def check_new_videos():
                     if processed_count < max_first_run:
                         new_videos.append((video_id, channel_id, channel_name, published_at or datetime.now()))
                         processed_count += 1
-                        print(f"[{channel_name}] NEW VIDEO FOUND: {video_id} (published {published_at.date() if published_at else 'unknown'})")
+                        print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
                     elif not known_ids:
                         print(f"[{channel_name}] Stored {video_id} as anchor (first run limit reached)")
         
