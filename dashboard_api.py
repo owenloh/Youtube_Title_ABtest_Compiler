@@ -49,10 +49,9 @@ def health():
 
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
-    """Get summary of active videos only (excludes anchors/inactive)."""
+    """Get all videos (dashboard will filter by is_active)."""
     try:
-        videos = get_active_videos_for_dashboard()
-        # Convert datetime/date objects to ISO strings for JSON
+        videos = get_all_videos_summary()
         for video in videos:
             for key, value in video.items():
                 video[key] = serialize_value(value)
@@ -83,18 +82,16 @@ def get_stats():
     """Get overall statistics."""
     try:
         all_videos = get_all_videos_summary()
-        dashboard_videos = get_active_videos_for_dashboard()
         
-        # Active (is_active=TRUE) = shown in dashboard, being tracked
-        # Inactive (is_active=FALSE) = anchors/reference points, not shown
-        active_count = len(dashboard_videos)
-        inactive_count = sum(1 for v in all_videos if not v.get("is_active"))
-        with_comments = sum(1 for v in dashboard_videos if v.get("comment_id"))
+        # Active = is_active=TRUE (being tracked, shown in dashboard)
+        # Inactive = is_active=FALSE (reference points / stagnated)
+        active = [v for v in all_videos if v.get("is_active")]
+        inactive = [v for v in all_videos if not v.get("is_active")]
         
         return jsonify({
-            "tracked_videos": active_count,
-            "videos_with_comments": with_comments,
-            "reference_videos": inactive_count,
+            "active_videos": len(active),
+            "with_comments": sum(1 for v in active if v.get("comment_id")),
+            "inactive_videos": len(inactive),
             "total_in_db": len(all_videos),
         })
     except Exception as e:
