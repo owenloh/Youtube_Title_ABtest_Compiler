@@ -221,15 +221,21 @@ def check_new_videos():
                 new_videos_raw = rss_videos
             
             # Limit how many videos to process on first run (no known_ids)
+            # For channel page scrape (no dates), only take the first 3 videos (most recent)
             max_first_run = 3 if not known_ids else 50
             processed_count = 0
             
             for video_id, published_at in new_videos_raw:
-                # Skip date check if published_at is None (from channel page scrape)
-                if published_at is not None and published_at.date() < CUTOFF_DATE:
-                    # Still add to DB (establishes anchor) but don't process
+                # For channel page scrape (no dates), only process first few
+                if published_at is None:
+                    if processed_count >= 3:
+                        # Don't store old videos without dates - we don't know when they were published
+                        continue
+                elif published_at.date() < CUTOFF_DATE:
+                    # Video is before cutoff - store as anchor but don't process
                     add_video(video_id, channel_id, published_at, is_short=False)
                     continue
+                
                 if is_short(video_id):
                     add_video(video_id, channel_id, published_at or datetime.now(), is_short=True)
                     continue
@@ -239,9 +245,9 @@ def check_new_videos():
                     if processed_count < max_first_run:
                         new_videos.append((video_id, channel_id, channel_name, published_at or datetime.now()))
                         processed_count += 1
+                        print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
                     elif not known_ids:
                         print(f"[{channel_name}] Stored {video_id} as anchor (first run limit reached)")
-                    print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
