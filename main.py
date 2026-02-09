@@ -274,9 +274,9 @@ def check_new_videos():
                 
                 # First run: ensure at least 1 long-form video exists for HTTP fallback anchor
                 if not known_ids and processed_count == 0:
-                    # No videos after cutoff - store newest long-form as anchor
+                    # No videos after cutoff - store newest long-form as anchor (inactive)
                     vid_id, vid_date = long_form_videos[0]
-                    add_video(vid_id, channel_slug, vid_date, is_active=False, is_anchor=True)
+                    add_video(vid_id, channel_slug, vid_date, is_active=False)
                     print(f"[{channel_name}] Stored {vid_id} as anchor")
             
             else:
@@ -301,9 +301,9 @@ def check_new_videos():
                             print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
                     # No anchor - first run via HTTP
-                    # Store first video as anchor
+                    # Store first video as anchor (inactive)
                     vid_id, _ = rss_videos[0]
-                    add_video(vid_id, channel_slug, datetime.now(), is_active=False, is_anchor=True)
+                    add_video(vid_id, channel_slug, datetime.now(), is_active=False)
                     print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor")
         
         except Exception as e:

@@ -129,20 +129,16 @@
                     <div class="value">${stats.tracked_videos || 0}</div>
                 </div>
                 <div class="stat-card">
-                    <h3>Active (Checking)</h3>
-                    <div class="value">${stats.active_videos || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <h3>Stagnated (Finalized)</h3>
-                    <div class="value">${stats.stagnated_videos || 0}</div>
-                </div>
-                <div class="stat-card">
                     <h3>With Comments</h3>
                     <div class="value">${stats.videos_with_comments || 0}</div>
                 </div>
                 <div class="stat-card">
-                    <h3>Anchors (Hidden)</h3>
-                    <div class="value">${stats.anchor_videos || 0}</div>
+                    <h3>Reference (Hidden)</h3>
+                    <div class="value">${stats.reference_videos || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total in DB</h3>
+                    <div class="value">${stats.total_in_db || 0}</div>
                 </div>
             `;
             document.getElementById('stats').innerHTML = statsHtml;
