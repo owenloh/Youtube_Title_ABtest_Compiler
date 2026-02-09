@@ -221,50 +221,77 @@ def check_new_videos():
                 print(f"[{channel_name}] No videos found")
                 return []
             
-            print(f"[{channel_name}] Found {len(rss_videos)} videos from RSS/scrape")
+            # Check if we have dates (RSS) or not (HTTP fallback)
+            has_dates = rss_videos[0][1] is not None
+            
             add_channel(channel_slug, channel_name)
             known_ids = set(get_known_video_ids_for_channel(channel_slug, limit=50))
             
-            if known_ids:
+            print(f"[{channel_name}] Found {len(rss_videos)} videos ({'RSS' if has_dates else 'HTTP'}), {len(known_ids)} known")
+            
+            if has_dates:
+                # RSS MODE: We have publish dates
+                # Only store/process videos AFTER cutoff date
+                # Always ensure at least 1 video stored (newest after cutoff) for HTTP fallback reference
+                
+                processed_count = 0
+                for video_id, published_at in rss_videos:
+                    # Skip if before cutoff - don't store at all
+                    if published_at.date() < CUTOFF_DATE:
+                        continue
+                    
+                    # Skip if already known
+                    if video_id in known_ids:
+                        continue
+                    
+                    # Check if it's a short
+                    if is_short(video_id):
+                        add_video(video_id, channel_slug, published_at, is_short=True)
+                        print(f"[{channel_name}] Skipping {video_id} (Short)")
+                        continue
+                    
+                    # Store and process
+                    if add_video(video_id, channel_slug, published_at, is_short=False):
+                        new_videos.append((video_id, channel_slug, channel_name, published_at))
+                        processed_count += 1
+                        print(f"[{channel_name}] NEW VIDEO: {video_id} (published {published_at.date()})")
+                
+                # Ensure at least 1 video exists for this channel (for HTTP fallback anchor)
+                if not known_ids and processed_count == 0:
+                    # No videos after cutoff and no known videos - store the newest one as reference
+                    newest_id, newest_date = rss_videos[0]
+                    if not is_short(newest_id):
+                        add_video(newest_id, channel_slug, newest_date, is_short=False)
+                        print(f"[{channel_name}] Stored {newest_id} as anchor (no videos after cutoff)")
+            
+            else:
+                # HTTP MODE: No dates, use anchor-based detection
+                # Find newest known video in the list
                 anchor_index = None
                 for i, (video_id, _) in enumerate(rss_videos):
                     if video_id in known_ids:
                         anchor_index = i
                         break
-                new_videos_raw = rss_videos[:anchor_index] if anchor_index is not None else rss_videos
-            else:
-                new_videos_raw = rss_videos
-            
-            print(f"[{channel_name}] {len(new_videos_raw)} candidates, {len(known_ids)} known")
-            
-            # Limit how many videos to process on first run (no known_ids)
-            # For channel page scrape (no dates), only take the first 3 videos (most recent)
-            max_first_run = 3 if not known_ids else 50
-            processed_count = 0
-            
-            for video_id, published_at in new_videos_raw:
-                # For channel page scrape (no dates), only process first few
-                if published_at is None:
-                    if processed_count >= 3:
-                        # Don't store old videos without dates - we don't know when they were published
+                
+                if anchor_index is not None:
+                    # Only process videos newer than anchor (before it in list)
+                    candidates = rss_videos[:anchor_index]
+                else:
+                    # No anchor - first run via HTTP, only take first 3
+                    candidates = rss_videos[:3]
+                
+                for video_id, _ in candidates:
+                    if video_id in known_ids:
                         continue
-                elif published_at.date() < CUTOFF_DATE:
-                    # Video is before cutoff - store as anchor but don't process
-                    add_video(video_id, channel_slug, published_at, is_short=False)
-                    continue
-                
-                if is_short(video_id):
-                    add_video(video_id, channel_slug, published_at or datetime.now(), is_short=True)
-                    continue
-                
-                if add_video(video_id, channel_slug, published_at or datetime.now(), is_short=False):
-                    # On first run, only process the most recent few videos
-                    if processed_count < max_first_run:
-                        new_videos.append((video_id, channel_slug, channel_name, published_at or datetime.now()))
-                        processed_count += 1
-                        print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
-                    elif not known_ids:
-                        print(f"[{channel_name}] Stored {video_id} as anchor (first run limit reached)")
+                    
+                    if is_short(video_id):
+                        add_video(video_id, channel_slug, datetime.now(), is_short=True)
+                        print(f"[{channel_name}] Skipping {video_id} (Short)")
+                        continue
+                    
+                    if add_video(video_id, channel_slug, datetime.now(), is_short=False):
+                        new_videos.append((video_id, channel_slug, channel_name, datetime.now()))
+                        print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
