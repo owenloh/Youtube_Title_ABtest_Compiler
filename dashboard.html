@@ -119,7 +119,13 @@
                 const url = `https://youtube.com/watch?v=${v.video_id}`;
                 const commentUrl = v.comment_id ? `${url}&lc=${v.comment_id}` : '';
                 const status = v.is_active ? '<span class="badge active">Active</span>' : '<span class="badge inactive">Inactive</span>';
-                const comment = v.comment_id ? `<a href="${commentUrl}" target="_blank">View</a>` : '-';
+                let comment = '-';
+                if (v.comment_id) {
+                    const statusText = v.comment_status === 'heldForReview' ? ' (held)' : 
+                                       v.comment_status === 'published' ? '' : 
+                                       v.comment_status ? ` (${v.comment_status})` : '';
+                    comment = `<a href="${commentUrl}" target="_blank">View${statusText}</a>`;
+                }
                 return `<tr>
                     <td><a href="${url}" target="_blank">${v.video_id}</a></td>
                     <td>${v.channel_name}</td>

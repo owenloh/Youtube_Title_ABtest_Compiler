@@ -2,6 +2,7 @@
 Main scheduler: checks for new videos every minute, checks active videos every hour.
 Processes videos immediately and tracks title history.
 """
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +14,7 @@ from config import (
     ACTIVE_VIDEO_CHECK_INTERVAL,
     CHANNELS,
     COMMENT_DESCRIPTION,
+    COMMENT_INTROS,
     CUTOFF_DATE,
     INACTIVE_DAYS_THRESHOLD,
     MIN_SAMPLES_TO_POST,
@@ -32,6 +34,7 @@ from storage import (
     get_title_stats,
     get_total_samples,
     get_unique_titles_for_date,
+    get_videos_without_comments,
     init_db,
     is_video_active,
     mark_video_deleted,
@@ -48,50 +51,58 @@ from youtube_comment import post_comment, update_comment
 executor = ThreadPoolExecutor(max_workers=10)
 
 
+def reprocess_videos_without_comments():
+    """Find and reprocess any active videos that don't have comments yet."""
+    videos = get_videos_without_comments()
+    if not videos:
+        print("No videos without comments to reprocess")
+        return
+    
+    print(f"Found {len(videos)} videos without comments - reprocessing...")
+    for video in videos:
+        video_id = video["video_id"]
+        channel_id = video["channel_id"]
+        channel_name = video["channel_name"]
+        published_at = video["published_at"]
+        
+        executor.submit(process_video, video_id, channel_id, channel_name, published_at)
+        print(f"[{channel_name}] Spawned reprocess task for {video_id}")
+
+
 def build_comment_text(video_id: str, is_finalized: bool = False) -> str:
     """Build comment text with historical title changes."""
     history = get_title_history_by_date(video_id)
     
-    lines = [COMMENT_DESCRIPTION, ""]
+    # Random intro line to avoid spam detection
+    intro = random.choice(COMMENT_INTROS)
     
-    # If no history, get current titles from stats
     if not history:
+        # No history yet, get from stats
         stats = get_title_stats(video_id)
         if stats:
-            lines.append("Titles observed:")
-            for i, (title, _) in enumerate(stats, 1):
-                short = (title[:80] + "...") if len(title) > 80 else title
-                lines.append(f"{i}. {short}")
-        else:
-            lines.append("(No data yet)")
-    elif len(history) == 1:
-        # Single date - simple format
-        hist_date, titles = history[0]
-        if len(titles) == 1:
-            lines.append(f"Title: {titles[0]}")
-        else:
-            lines.append("Titles observed:")
-            for i, title in enumerate(titles, 1):
-                short = (title[:80] + "...") if len(title) > 80 else title
-                lines.append(f"{i}. {short}")
-    else:
-        # Multiple dates - show history
-        if is_finalized:
-            lines.append("Title history:")
-        else:
-            lines.append("Title changes detected:")
-        lines.append("")
-        for hist_date, titles in history:
-            date_str = hist_date.strftime("%d %b")
+            titles = [t for t, _ in stats]
             if len(titles) == 1:
-                lines.append(f"{date_str}: {titles[0]}")
+                return f"{intro}\n\nCurrent title: {titles[0][:100]}"
             else:
-                lines.append(f"{date_str}:")
-                for i, title in enumerate(titles, 1):
-                    short = (title[:80] + "...") if len(title) > 80 else title
-                    lines.append(f"  {i}. {short}")
+                title_str = " | ".join(t[:60] for t in titles[:4])
+                if len(titles) > 4:
+                    title_str += f" (+{len(titles)-4})"
+                return f"{intro}\n\nTitles seen: {title_str}"
+        return intro
     
-    return "\n".join(lines).strip()
+    # Build date-based format: "Feb 7: Title A | Title B"
+    lines = [intro, ""]
+    for hist_date, titles in history:
+        date_str = hist_date.strftime("%b %d")
+        if len(titles) == 1:
+            lines.append(f"{date_str}: {titles[0][:80]}")
+        else:
+            title_str = " | ".join(t[:50] for t in titles[:4])
+            if len(titles) > 4:
+                title_str += f" (+{len(titles)-4})"
+            lines.append(f"{date_str}: {title_str}")
+    
+    return "\n".join(lines)
 
 
 def process_video(video_id: str, channel_id: str, channel_name: str, published_at: datetime, fast_first: bool = True):
@@ -107,23 +118,31 @@ def process_video(video_id: str, channel_id: str, channel_name: str, published_a
     
     if fast_first and not existing_comment and not SKIP_COMMENT:
         # FAST PATH: Get 5 samples in parallel, post comment ASAP
-        print(f"[{channel_name}] Fast-posting comment for {video_id}...")
-        quick_titles = sample_titles(video_id, 5, parallel=True)  # ~1-2s total
+        try:
+            quick_titles = sample_titles(video_id, 5, parallel=True)
+        except Exception as e:
+            print(f"[{channel_name}] ERROR sampling titles for {video_id}: {e}", flush=True)
+            quick_titles = []
         
         if quick_titles:
-            for title in quick_titles:
-                add_title_sample(video_id, title)
-            
-            today = date.today()
-            update_title_history(video_id, list(set(quick_titles)), today)
-            
-            comment_text = build_comment_text(video_id, is_finalized=False)
-            new_id = post_comment(video_id, comment_text)
-            if new_id:
-                set_comment_id(video_id, new_id)
-                print(f"[{channel_name}] FAST COMMENT POSTED for {video_id}")
-            else:
-                print(f"[{channel_name}] Failed to post fast comment for {video_id}")
+            try:
+                for title in quick_titles:
+                    add_title_sample(video_id, title)
+                
+                today = date.today()
+                update_title_history(video_id, list(set(quick_titles)), today)
+                
+                comment_text = build_comment_text(video_id, is_finalized=False)
+                new_id, status = post_comment(video_id, comment_text)
+                if new_id:
+                    set_comment_id(video_id, new_id, status)
+                    print(f"[{channel_name}] Comment posted for {video_id} (status: {status})", flush=True)
+                elif status == "quota_exceeded":
+                    print(f"[{channel_name}] Quota exceeded - skipping comment for {video_id}", flush=True)
+                else:
+                    print(f"[{channel_name}] Failed to post comment for {video_id}", flush=True)
+            except Exception as e:
+                print(f"[{channel_name}] ERROR posting comment for {video_id}: {e}", flush=True)
         
         # Continue with more samples in background (sequential to be gentle)
         remaining_samples = SAMPLES_PER_RUN - 5
@@ -215,10 +234,8 @@ def check_new_videos():
         """Check single channel, return list of new videos to process."""
         new_videos = []
         try:
-            print(f"[{channel_name}] Checking channel {channel_slug}")
             rss_videos = get_videos_from_rss(channel_slug, expected_name=channel_name, max_videos=50)
             if not rss_videos:
-                print(f"[{channel_name}] No videos found")
                 return []
             
             # Check if we have dates (RSS) or not (HTTP fallback)
@@ -226,8 +243,6 @@ def check_new_videos():
             
             add_channel(channel_slug, channel_name)
             known_ids = set(get_known_video_ids_for_channel(channel_slug, limit=50))
-            
-            print(f"[{channel_name}] Found {len(rss_videos)} videos ({'RSS' if has_dates else 'HTTP'}), {len(known_ids)} known")
             
             if has_dates:
                 # RSS MODE: We have publish dates
@@ -239,8 +254,6 @@ def check_new_videos():
                 for video_id, published_at in rss_videos:
                     if not is_short(video_id):
                         long_form_videos.append((video_id, published_at))
-                    else:
-                        print(f"[{channel_name}] Skipping {video_id} (Short)")
                 
                 if not long_form_videos:
                     print(f"[{channel_name}] No long-form videos found")
@@ -277,7 +290,6 @@ def check_new_videos():
                     # No videos after cutoff - store newest long-form as anchor (inactive)
                     vid_id, vid_date = long_form_videos[0]
                     add_video(vid_id, channel_slug, vid_date, is_active=False)
-                    print(f"[{channel_name}] Stored {vid_id} as anchor")
             
             else:
                 # HTTP MODE: No dates, already filtered to long-form only
@@ -304,7 +316,6 @@ def check_new_videos():
                     # Store first video as anchor (inactive)
                     vid_id, _ = rss_videos[0]
                     add_video(vid_id, channel_slug, datetime.now(), is_active=False)
-                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
@@ -318,8 +329,6 @@ def check_new_videos():
         executor.submit(check_channel, ch_slug, ch_name): (ch_slug, ch_name)
         for ch_slug, ch_name in CHANNELS
     }
-    
-    print(f"Submitted {len(futures)} channel checks...")
     
     # Collect new videos and spawn processing tasks
     for future in as_completed(futures):
@@ -435,6 +444,9 @@ def run_scheduler():
     """Run the main scheduler loop."""
     print("Initializing database...")
     init_db()
+    
+    # Reprocess any videos that have no comments (from failed earlier runs)
+    reprocess_videos_without_comments()
     
     print(f"Starting scheduler:")
     print(f"  - New video check: every {NEW_VIDEO_CHECK_INTERVAL}s")

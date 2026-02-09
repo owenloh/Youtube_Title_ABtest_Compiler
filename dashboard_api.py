@@ -1,4 +1,5 @@
 """Flask API for dashboard - health and status tracking."""
+import logging
 from datetime import datetime, date
 from flask import Flask, jsonify, send_file
 from flask_cors import CORS
@@ -7,6 +8,10 @@ from storage import get_all_videos_summary, get_active_videos_for_dashboard, get
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend to call from any origin
+
+# Disable Flask request logging (clutters Railway logs)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 
 @app.route("/", methods=["GET"])

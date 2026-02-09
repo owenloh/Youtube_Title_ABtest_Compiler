@@ -116,6 +116,34 @@ def init_db():
                 END $$;
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_videos_active ON videos(is_active)")
+            
+            # Migration: add last_seen_date column to title_history if it doesn't exist
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='title_history' AND column_name='last_seen_date'
+                    ) THEN
+                        ALTER TABLE title_history ADD COLUMN last_seen_date DATE;
+                        UPDATE title_history SET last_seen_date = first_seen_date WHERE last_seen_date IS NULL;
+                        ALTER TABLE title_history ALTER COLUMN last_seen_date SET NOT NULL;
+                    END IF;
+                END $$;
+            """)
+            
+            # Migration: add comment_status column to videos
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='videos' AND column_name='comment_status'
+                    ) THEN
+                        ALTER TABLE videos ADD COLUMN comment_status TEXT;
+                    END IF;
+                END $$;
+            """)
         conn.commit()
     finally:
         return_conn(conn)
@@ -262,15 +290,15 @@ def get_comment_id(video_id: str) -> Optional[str]:
         return_conn(conn)
 
 
-def set_comment_id(video_id: str, comment_id: str):
-    """Set comment ID for a video."""
+def set_comment_id(video_id: str, comment_id: str, status: str = None):
+    """Set comment ID and status for a video."""
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE videos SET comment_id = %s, comment_posted_at = CURRENT_TIMESTAMP "
+                "UPDATE videos SET comment_id = %s, comment_posted_at = CURRENT_TIMESTAMP, comment_status = %s "
                 "WHERE video_id = %s",
-                (comment_id, video_id),
+                (comment_id, status, video_id),
             )
         conn.commit()
     finally:
@@ -494,7 +522,7 @@ def get_all_videos_summary() -> List[dict]:
                 """
                 SELECT v.video_id, v.channel_id, c.display_name as channel_name,
                        v.published_at, v.is_ignored, v.is_deleted, v.is_active,
-                       v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
+                       v.comment_id, v.comment_status, v.comment_posted_at, v.comment_last_edited_at,
                        v.last_checked_at,
                        COUNT(DISTINCT ts.title_text) as unique_titles,
                        COUNT(ts.id) as total_samples
@@ -530,6 +558,28 @@ def get_active_videos_for_dashboard() -> List[dict]:
                 GROUP BY v.video_id, c.display_name
                 ORDER BY v.published_at DESC
                 """,
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        return_conn(conn)
+
+
+def get_videos_without_comments() -> List[dict]:
+    """Get active videos that have no comment_id (need reprocessing)."""
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT v.video_id, v.channel_id, c.display_name as channel_name, v.published_at
+                FROM videos v
+                JOIN channels c ON v.channel_id = c.channel_id
+                WHERE v.is_active = TRUE 
+                  AND v.is_ignored = FALSE 
+                  AND v.is_deleted = FALSE 
+                  AND v.comment_id IS NULL
+                ORDER BY v.published_at DESC
+                """
             )
             return [dict(row) for row in cur.fetchall()]
     finally:

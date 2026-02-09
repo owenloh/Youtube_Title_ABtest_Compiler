@@ -66,7 +66,6 @@ def _resolve_handle_to_channel_id(handle: str, expected_name: str = None) -> Opt
                         print(f"WARNING: Channel name mismatch for {handle}: expected '{expected_name}', found '{found_name}'")
             
             _handle_to_channel_id_cache[handle] = channel_id
-            print(f"Resolved {handle} -> {channel_id}")
             return channel_id
             
     except Exception as e:

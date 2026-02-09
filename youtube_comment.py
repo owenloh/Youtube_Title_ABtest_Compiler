@@ -12,24 +12,30 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 def get_credentials():
     """Build credentials from refresh token (set in env for Railway)."""
     if not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET or not YOUTUBE_REFRESH_TOKEN:
+        print("Missing YouTube credentials (CLIENT_ID, CLIENT_SECRET, or REFRESH_TOKEN)")
         return None
-    creds = Credentials(
-        token=None,
-        refresh_token=YOUTUBE_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=YOUTUBE_CLIENT_ID,
-        client_secret=YOUTUBE_CLIENT_SECRET,
-        scopes=SCOPES,
-    )
-    creds.refresh(Request())
-    return creds
+    try:
+        creds = Credentials(
+            token=None,
+            refresh_token=YOUTUBE_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=YOUTUBE_CLIENT_ID,
+            client_secret=YOUTUBE_CLIENT_SECRET,
+            scopes=SCOPES,
+        )
+        creds.refresh(Request())
+        return creds
+    except Exception as e:
+        print(f"Failed to refresh credentials: {e}")
+        return None
 
 
-def post_comment(video_id: str, text: str) -> str | None:
-    """Post a top-level comment; returns the comment ID."""
+def post_comment(video_id: str, text: str) -> tuple[str | None, str | None]:
+    """Post a top-level comment; returns (comment_id, moderation_status)."""
     creds = get_credentials()
     if not creds:
-        return None
+        print(f"No credentials available for posting comment on {video_id}")
+        return None, None
     youtube = build("youtube", "v3", credentials=creds)
     body = {
         "snippet": {
@@ -43,10 +49,29 @@ def post_comment(video_id: str, text: str) -> str | None:
     }
     try:
         response = youtube.commentThreads().insert(part="snippet", body=body).execute()
-        return response["snippet"]["topLevelComment"]["id"]
+        comment_id = response["snippet"]["topLevelComment"]["id"]
+        
+        # Check moderation status
+        moderation_status = response["snippet"]["topLevelComment"]["snippet"].get("moderationStatus", "unknown")
+        is_public = response["snippet"].get("isPublic", None)
+        
+        if moderation_status == "heldForReview":
+            print(f"Comment {comment_id} on {video_id}: HELD FOR REVIEW")
+        elif moderation_status == "published" or is_public:
+            print(f"Comment {comment_id} on {video_id}: PUBLISHED")
+        else:
+            print(f"Comment {comment_id} on {video_id}: status={moderation_status}, public={is_public}")
+        
+        return comment_id, moderation_status
     except HttpError as e:
-        print(f"API error posting comment: {e}")
-        return None
+        if "quota" in str(e).lower():
+            print(f"QUOTA EXCEEDED - cannot post comment on {video_id}")
+            return None, "quota_exceeded"
+        print(f"API error posting comment on {video_id}: {e}")
+        return None, "error"
+    except Exception as e:
+        print(f"Unexpected error posting comment on {video_id}: {e}")
+        return None, "error"
 
 
 def update_comment(comment_id: str, text: str) -> bool:
@@ -74,4 +99,24 @@ def update_comment(comment_id: str, text: str) -> bool:
             print(f"Comment {comment_id} not found (deleted?) - status {e.resp.status}")
             raise  # Re-raise so caller can mark video as ignored
         print(f"API error updating comment: {e}")
+        return False
+
+
+def verify_comment_exists(comment_id: str) -> bool:
+    """Check if a comment actually exists (not spam-filtered)."""
+    creds = get_credentials()
+    if not creds:
+        return False
+    youtube = build("youtube", "v3", credentials=creds)
+    try:
+        response = youtube.comments().list(part="id", id=comment_id).execute()
+        exists = len(response.get("items", [])) > 0
+        if not exists:
+            print(f"Comment {comment_id} was spam-filtered or doesn't exist")
+        return exists
+    except HttpError as e:
+        print(f"Error verifying comment {comment_id}: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error verifying comment {comment_id}: {e}")
         return False
