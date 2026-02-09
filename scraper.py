@@ -21,6 +21,51 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+# Cache for @handle -> channel_id resolution
+_handle_to_channel_id_cache = {}
+
+
+def _is_handle(channel_identifier: str) -> bool:
+    """Check if identifier is a @handle (vs channel ID)."""
+    return channel_identifier.startswith("@")
+
+
+def _resolve_handle_to_channel_id(handle: str) -> Optional[str]:
+    """Resolve @handle to channel ID by scraping the channel page."""
+    if handle in _handle_to_channel_id_cache:
+        return _handle_to_channel_id_cache[handle]
+    
+    # Remove @ if present
+    handle_clean = handle.lstrip("@")
+    url = f"https://www.youtube.com/@{handle_clean}"
+    
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        html = r.text
+        
+        # Look for channel ID in the page
+        # Pattern: "channelId":"UCxxxxxxxxxxxxxxxxxx"
+        match = re.search(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"', html)
+        if match:
+            channel_id = match.group(1)
+            _handle_to_channel_id_cache[handle] = channel_id
+            print(f"Resolved {handle} -> {channel_id}")
+            return channel_id
+        
+        # Alternative pattern: browse endpoint
+        match = re.search(r'"browseId":"(UC[a-zA-Z0-9_-]{22})"', html)
+        if match:
+            channel_id = match.group(1)
+            _handle_to_channel_id_cache[handle] = channel_id
+            print(f"Resolved {handle} -> {channel_id}")
+            return channel_id
+            
+    except Exception as e:
+        print(f"Failed to resolve handle {handle}: {e}")
+    
+    return None
+
 
 def _get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
     """Try RSS feed first (free, no quota)."""
@@ -103,14 +148,21 @@ def _get_videos_from_api(channel_id: str, max_videos: int = 50) -> List[Tuple[st
     return videos
 
 
-def _get_videos_from_channel_page(channel_id: str, max_videos: int = 15) -> List[Tuple[str, datetime]]:
+def _get_videos_from_channel_page(channel_identifier: str, max_videos: int = 15) -> List[Tuple[str, datetime]]:
     """Fallback: Scrape channel page directly (free, no API).
+    
+    Supports both channel IDs (UCxxx) and @handles.
     
     NOTE: This method doesn't get publish dates, so we return None for dates.
     The caller must handle this - only use for detecting NEW videos by comparing
     against known IDs, not for date filtering.
     """
-    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    # Build URL based on identifier type
+    if _is_handle(channel_identifier):
+        url = f"https://www.youtube.com/{channel_identifier}/videos"
+    else:
+        url = f"https://www.youtube.com/channel/{channel_identifier}/videos"
+    
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
         r.raise_for_status()
@@ -133,17 +185,35 @@ def _get_videos_from_channel_page(channel_id: str, max_videos: int = 15) -> List
         return [(vid, None) for vid in unique_ids]
     
     except Exception as e:
-        print(f"Channel page scrape failed for {channel_id}: {e}")
+        print(f"Channel page scrape failed for {channel_identifier}: {e}")
         return []
 
 
-def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
+def get_videos_from_rss(channel_identifier: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
     """
     Get videos from channel. Tries RSS first (free), then channel page scrape.
     NO API fallback - save quota for commenting.
+    
+    Supports both channel IDs (UCxxx) and @handles.
     Returns: [(video_id, published_at), ...] ordered newest first.
     """
-    # Try RSS first (free, has publish dates)
+    # For RSS, we need the channel ID (not handle)
+    # If it's a handle, resolve it first
+    if _is_handle(channel_identifier):
+        channel_id = _resolve_handle_to_channel_id(channel_identifier)
+        if not channel_id:
+            print(f"Could not resolve handle {channel_identifier}, trying channel page directly...")
+            # Fall through to channel page scrape which supports handles
+            videos = _get_videos_from_channel_page(channel_identifier, max_videos)
+            if videos:
+                print(f"Channel page scrape succeeded for {channel_identifier}")
+                return videos
+            print(f"All methods failed for {channel_identifier}")
+            return []
+    else:
+        channel_id = channel_identifier
+    
+    # Try RSS first (free, has publish dates) - requires channel ID
     try:
         videos = _get_videos_from_rss(channel_id, max_videos)
         if videos:
@@ -152,12 +222,13 @@ def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str
         print(f"RSS failed for {channel_id}: {e}, trying channel page...")
     
     # Fallback: scrape channel page (free, no publish dates)
-    videos = _get_videos_from_channel_page(channel_id, max_videos)
+    # Use original identifier (works with both ID and handle)
+    videos = _get_videos_from_channel_page(channel_identifier, max_videos)
     if videos:
-        print(f"Channel page scrape succeeded for {channel_id}")
+        print(f"Channel page scrape succeeded for {channel_identifier}")
         return videos
     
-    print(f"All methods failed for {channel_id}")
+    print(f"All methods failed for {channel_identifier}")
     return []
 
 
