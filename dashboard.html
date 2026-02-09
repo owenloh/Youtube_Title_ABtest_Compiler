@@ -99,9 +99,7 @@
     </div>
 
     <script>
-        const API_URL = window.location.origin.includes('netlify') 
-            ? 'https://your-railway-app.up.railway.app'  // Update with your Railway URL
-            : 'http://localhost:5000';
+        const API_URL = '';  // Same origin - Flask serves both dashboard and API
         
         let allVideos = [];
         let currentFilter = 'all';

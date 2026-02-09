@@ -1,12 +1,18 @@
 """Flask API for dashboard - health and status tracking."""
 from datetime import datetime, date
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_file
 from flask_cors import CORS
 
 from storage import get_all_videos_summary, get_video_info, init_db
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend to call from any origin
+
+
+@app.route("/", methods=["GET"])
+def dashboard():
+    """Serve the dashboard HTML."""
+    return send_file("dashboard.html")
 
 
 def serialize_value(value):

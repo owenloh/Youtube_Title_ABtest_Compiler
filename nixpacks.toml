@@ -6,4 +6,4 @@ nixPkgs = ["python311"]
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "python main.py"
+cmd = "python app.py"
