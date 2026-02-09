@@ -231,17 +231,30 @@ def check_new_videos():
             
             if has_dates:
                 # RSS MODE: We have publish dates
-                # Find anchor (first known video) to know where to stop
-                # Only store/process videos AFTER cutoff date AND newer than anchor
+                # RSS includes shorts, so filter them out first before anchor detection
+                # NEVER store shorts - they can't be anchors for HTTP fallback
                 
+                # Filter to long-form videos only
+                long_form_videos = []
+                for video_id, published_at in rss_videos:
+                    if not is_short(video_id):
+                        long_form_videos.append((video_id, published_at))
+                    else:
+                        print(f"[{channel_name}] Skipping {video_id} (Short)")
+                
+                if not long_form_videos:
+                    print(f"[{channel_name}] No long-form videos found")
+                    return new_videos
+                
+                # Find anchor (first known video) in long-form list
                 anchor_index = None
-                for i, (video_id, _) in enumerate(rss_videos):
+                for i, (video_id, _) in enumerate(long_form_videos):
                     if video_id in known_ids:
                         anchor_index = i
                         break
                 
                 # Only consider videos before anchor (newer)
-                candidates = rss_videos[:anchor_index] if anchor_index is not None else rss_videos
+                candidates = long_form_videos[:anchor_index] if anchor_index is not None else long_form_videos
                 
                 processed_count = 0
                 for video_id, published_at in candidates:
@@ -249,32 +262,25 @@ def check_new_videos():
                     if published_at.date() < CUTOFF_DATE:
                         continue
                     
-                    # Skip if already known (shouldn't happen with anchor, but safety check)
+                    # Skip if already known
                     if video_id in known_ids:
                         continue
                     
-                    # Check if it's a short
-                    if is_short(video_id):
-                        add_video(video_id, channel_slug, published_at, is_short=True)
-                        print(f"[{channel_name}] Skipping {video_id} (Short)")
-                        continue
-                    
-                    # Store and process
+                    # Store and process long-form video
                     if add_video(video_id, channel_slug, published_at, is_short=False):
                         new_videos.append((video_id, channel_slug, channel_name, published_at))
                         processed_count += 1
                         print(f"[{channel_name}] NEW VIDEO: {video_id} (published {published_at.date()})")
                 
-                # First run: ensure at least 1 video exists for HTTP fallback anchor
+                # First run: ensure at least 1 long-form video exists for HTTP fallback anchor
                 if not known_ids and processed_count == 0:
-                    # No videos after cutoff - store the newest one as reference
-                    newest_id, newest_date = rss_videos[0]
-                    if not is_short(newest_id):
-                        add_video(newest_id, channel_slug, newest_date, is_short=False)
-                        print(f"[{channel_name}] Stored {newest_id} as anchor (no videos after cutoff)")
+                    # No videos after cutoff - store newest long-form as anchor
+                    vid_id, vid_date = long_form_videos[0]
+                    add_video(vid_id, channel_slug, vid_date, is_short=False)
+                    print(f"[{channel_name}] Stored {vid_id} as anchor (no videos after cutoff)")
             
             else:
-                # HTTP MODE: No dates, use anchor-based detection
+                # HTTP MODE: No dates, already filtered to long-form only
                 # Find newest known video in the list
                 anchor_index = None
                 for i, (video_id, _) in enumerate(rss_videos):
@@ -290,21 +296,15 @@ def check_new_videos():
                         if video_id in known_ids:
                             continue
                         
-                        if is_short(video_id):
-                            add_video(video_id, channel_slug, datetime.now(), is_short=True)
-                            print(f"[{channel_name}] Skipping {video_id} (Short)")
-                            continue
-                        
                         if add_video(video_id, channel_slug, datetime.now(), is_short=False):
                             new_videos.append((video_id, channel_slug, channel_name, datetime.now()))
                             print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
                     # No anchor - first run via HTTP
-                    # Just store the first video as anchor, process nothing
-                    first_id, _ = rss_videos[0]
-                    if not is_short(first_id):
-                        add_video(first_id, channel_slug, datetime.now(), is_short=False)
-                        print(f"[{channel_name}] First HTTP run - stored {first_id} as anchor, will process new videos next run")
+                    # Store first video as anchor, process nothing
+                    vid_id, _ = rss_videos[0]
+                    add_video(vid_id, channel_slug, datetime.now(), is_short=False)
+                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor, will process new videos next run")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
