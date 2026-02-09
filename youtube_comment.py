@@ -100,23 +100,3 @@ def update_comment(comment_id: str, text: str) -> bool:
             raise  # Re-raise so caller can mark video as ignored
         print(f"API error updating comment: {e}")
         return False
-
-
-def verify_comment_exists(comment_id: str) -> bool:
-    """Check if a comment actually exists (not spam-filtered)."""
-    creds = get_credentials()
-    if not creds:
-        return False
-    youtube = build("youtube", "v3", credentials=creds)
-    try:
-        response = youtube.comments().list(part="id", id=comment_id).execute()
-        exists = len(response.get("items", [])) > 0
-        if not exists:
-            print(f"Comment {comment_id} was spam-filtered or doesn't exist")
-        return exists
-    except HttpError as e:
-        print(f"Error verifying comment {comment_id}: {e}")
-        return False
-    except Exception as e:
-        print(f"Unexpected error verifying comment {comment_id}: {e}")
-        return False

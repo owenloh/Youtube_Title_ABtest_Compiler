@@ -35,20 +35,16 @@ except ValueError:
     CUTOFF_DATE = date(2026, 2, 8)  # Default: Feb 8, 2026
 
 # Polling intervals (in seconds)
-NEW_VIDEO_CHECK_INTERVAL = int(os.environ.get("NEW_VIDEO_CHECK_INTERVAL", "60"))  # 1 minute
+NEW_VIDEO_CHECK_INTERVAL = int(os.environ.get("NEW_VIDEO_CHECK_INTERVAL", "180"))  # 3 minutes
 ACTIVE_VIDEO_CHECK_INTERVAL = int(os.environ.get("ACTIVE_VIDEO_CHECK_INTERVAL", "3600"))  # 1 hour
 
 # Title sampling
-SAMPLES_PER_RUN = int(os.environ.get("SAMPLES_PER_RUN", "20"))
-MIN_SAMPLES_TO_POST = int(os.environ.get("MIN_SAMPLES_TO_POST", "20"))
+SAMPLES_PER_RUN = int(os.environ.get("SAMPLES_PER_RUN", "21"))
 
 # Active/non-active logic: non-active if N days straight same single title
 INACTIVE_DAYS_THRESHOLD = int(os.environ.get("INACTIVE_DAYS_THRESHOLD", "5"))
 
-# Comment description
-COMMENT_DESCRIPTION = os.environ.get("COMMENT_DESCRIPTION", "so everyone sees different titles:")
-
-# Random intro lines to avoid spam detection - keep it simple and human
+# Random intro lines for comments
 COMMENT_INTROS = [
     "I noticed YouTube is testing different titles on this video",
     "Interesting, this video seems to have multiple titles being tested",

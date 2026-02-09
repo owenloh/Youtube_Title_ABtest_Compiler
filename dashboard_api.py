@@ -4,7 +4,7 @@ from datetime import datetime, date
 from flask import Flask, jsonify, send_file
 from flask_cors import CORS
 
-from storage import get_all_videos_summary, get_active_videos_for_dashboard, get_video_info, init_db
+from storage import get_all_videos_summary, get_video_info, init_db
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend to call from any origin

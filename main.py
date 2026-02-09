@@ -1,23 +1,20 @@
 """
-Main scheduler: checks for new videos every minute, checks active videos every hour.
+Main scheduler: checks for new videos every 3 minutes, checks active videos every hour.
 Processes videos immediately and tracks title history.
 """
 import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
-from threading import Thread
-from typing import List, Optional
+from datetime import date, datetime
+from typing import List
 
 from config import (
     ACTIVE_VIDEO_CHECK_INTERVAL,
     CHANNELS,
-    COMMENT_DESCRIPTION,
     COMMENT_INTROS,
     CUTOFF_DATE,
     INACTIVE_DAYS_THRESHOLD,
-    MIN_SAMPLES_TO_POST,
     NEW_VIDEO_CHECK_INTERVAL,
     SAMPLES_PER_RUN,
     SKIP_COMMENT,
@@ -37,7 +34,6 @@ from storage import (
     get_videos_without_comments,
     init_db,
     is_video_active,
-    mark_video_deleted,
     mark_video_ignored,
     mark_video_inactive,
     set_comment_id,
