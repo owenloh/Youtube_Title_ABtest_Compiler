@@ -1,9 +1,6 @@
-# Ensure Python 3 and install deps
+# Let Nixpacks auto-detect Python and handle pip
 [phases.setup]
-nixPkgs = ["python311"]
-
-[phases.install]
-cmds = ["python -m pip install -r requirements.txt"]
+nixPkgs = ["python311Full"]
 
 [start]
 cmd = "python app.py"
