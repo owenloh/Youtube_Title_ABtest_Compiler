@@ -301,11 +301,10 @@ def check_new_videos():
                             print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
                     # No anchor - first run via HTTP
-                    # Store first video as anchor (active - will be processed)
+                    # Store first video as anchor only (inactive - just reference point)
                     vid_id, _ = rss_videos[0]
-                    add_video(vid_id, channel_slug, datetime.now(), is_active=True)
-                    new_videos.append((vid_id, channel_slug, channel_name, datetime.now()))
-                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor (active)")
+                    add_video(vid_id, channel_slug, datetime.now(), is_active=False)
+                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor (inactive)")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)
