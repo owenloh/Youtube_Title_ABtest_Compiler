@@ -274,10 +274,10 @@ def check_new_videos():
                 
                 # First run: ensure at least 1 long-form video exists for HTTP fallback anchor
                 if not known_ids and processed_count == 0:
-                    # No videos after cutoff - store newest long-form as anchor
+                    # No videos after cutoff - store newest long-form as anchor (inactive)
                     vid_id, vid_date = long_form_videos[0]
-                    add_video(vid_id, channel_slug, vid_date, is_short=False)
-                    print(f"[{channel_name}] Stored {vid_id} as anchor (no videos after cutoff)")
+                    add_video(vid_id, channel_slug, vid_date, is_short=False, is_active=False)
+                    print(f"[{channel_name}] Stored {vid_id} as anchor (inactive, no videos after cutoff)")
             
             else:
                 # HTTP MODE: No dates, already filtered to long-form only
@@ -301,10 +301,11 @@ def check_new_videos():
                             print(f"[{channel_name}] NEW VIDEO: {video_id} (HTTP, no date)")
                 else:
                     # No anchor - first run via HTTP
-                    # Store first video as anchor, process nothing
+                    # Store first video as anchor (active - will be processed)
                     vid_id, _ = rss_videos[0]
-                    add_video(vid_id, channel_slug, datetime.now(), is_short=False)
-                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor, will process new videos next run")
+                    add_video(vid_id, channel_slug, datetime.now(), is_short=False, is_active=True)
+                    new_videos.append((vid_id, channel_slug, channel_name, datetime.now()))
+                    print(f"[{channel_name}] First HTTP run - stored {vid_id} as anchor (active)")
         
         except Exception as e:
             print(f"[{channel_name}] Error checking channel: {e}", file=sys.stderr)

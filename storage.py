@@ -182,15 +182,20 @@ def add_video(
     channel_id: str,
     published_at: datetime,
     is_short: bool = False,
+    is_active: bool = True,
 ) -> bool:
-    """Add a new video. Returns True if added, False if already exists."""
+    """Add a new video. Returns True if added, False if already exists.
+    
+    Args:
+        is_active: If False, video is stored as anchor only (not processed hourly).
+    """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO videos (video_id, channel_id, published_at, is_short) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
-                (video_id, channel_id, published_at, is_short),
+                "INSERT INTO videos (video_id, channel_id, published_at, is_short, is_active) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
+                (video_id, channel_id, published_at, is_short, is_active),
             )
             added = cur.rowcount > 0
         conn.commit()
