@@ -103,30 +103,58 @@ def _get_videos_from_api(channel_id: str, max_videos: int = 50) -> List[Tuple[st
     return videos
 
 
+def _get_videos_from_channel_page(channel_id: str, max_videos: int = 30) -> List[Tuple[str, datetime]]:
+    """Fallback: Scrape channel page directly (free, no API)."""
+    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        html = r.text
+        
+        # Extract video IDs from the page
+        # Pattern: "videoId":"XXXXXXXXXXX"
+        video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+        # Dedupe while preserving order
+        seen = set()
+        unique_ids = []
+        for vid in video_ids:
+            if vid not in seen:
+                seen.add(vid)
+                unique_ids.append(vid)
+                if len(unique_ids) >= max_videos:
+                    break
+        
+        # We don't get publish dates from this method, use current time as approximation
+        # This is fine for "is this video new?" checks since we compare against known IDs
+        now = datetime.now()
+        return [(vid, now) for vid in unique_ids]
+    
+    except Exception as e:
+        print(f"Channel page scrape failed for {channel_id}: {e}")
+        return []
+
+
 def get_videos_from_rss(channel_id: str, max_videos: int = 50) -> List[Tuple[str, datetime]]:
     """
-    Get videos from channel. Tries RSS first (free), falls back to API if RSS fails.
+    Get videos from channel. Tries RSS first (free), then channel page scrape.
+    NO API fallback - save quota for commenting.
     Returns: [(video_id, published_at), ...] ordered newest first.
     """
-    # Try RSS first
+    # Try RSS first (free, has publish dates)
     try:
         videos = _get_videos_from_rss(channel_id, max_videos)
         if videos:
             return videos
     except Exception as e:
-        print(f"RSS failed for {channel_id}: {e}, trying API...")
+        print(f"RSS failed for {channel_id}: {e}, trying channel page...")
     
-    # Fallback to API
-    try:
-        videos = _get_videos_from_api(channel_id, max_videos)
-        if videos:
-            print(f"API fallback succeeded for {channel_id}")
-            return videos
-    except HttpError as e:
-        print(f"API fallback failed for {channel_id}: {e}")
-    except Exception as e:
-        print(f"API fallback error for {channel_id}: {e}")
+    # Fallback: scrape channel page (free, no publish dates)
+    videos = _get_videos_from_channel_page(channel_id, max_videos)
+    if videos:
+        print(f"Channel page scrape succeeded for {channel_id}")
+        return videos
     
+    print(f"All methods failed for {channel_id}")
     return []
 
 
