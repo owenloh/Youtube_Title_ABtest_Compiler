@@ -51,6 +51,7 @@ def init_db():
                     video_id TEXT PRIMARY KEY,
                     channel_id TEXT NOT NULL REFERENCES channels(channel_id),
                     published_at TIMESTAMP NOT NULL,
+                    is_anchor BOOLEAN DEFAULT FALSE,
                     is_ignored BOOLEAN DEFAULT FALSE,
                     is_deleted BOOLEAN DEFAULT FALSE,
                     is_active BOOLEAN DEFAULT TRUE,
@@ -181,19 +182,21 @@ def add_video(
     channel_id: str,
     published_at: datetime,
     is_active: bool = True,
+    is_anchor: bool = False,
 ) -> bool:
     """Add a new video. Returns True if added, False if already exists.
     
     Args:
-        is_active: If False, video is stored as anchor only (not processed hourly).
+        is_active: If True, video is tracked (hourly checks, has/will have comment).
+        is_anchor: If True, video is just a reference point (not shown in dashboard).
     """
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO videos (video_id, channel_id, published_at, is_active) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
-                (video_id, channel_id, published_at, is_active),
+                "INSERT INTO videos (video_id, channel_id, published_at, is_active, is_anchor) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (video_id) DO NOTHING",
+                (video_id, channel_id, published_at, is_active, is_anchor),
             )
             added = cur.rowcount > 0
         conn.commit()
@@ -492,7 +495,7 @@ def get_all_videos_summary() -> List[dict]:
             cur.execute(
                 """
                 SELECT v.video_id, v.channel_id, c.display_name as channel_name,
-                       v.published_at, v.is_ignored, v.is_deleted, v.is_active,
+                       v.published_at, v.is_anchor, v.is_ignored, v.is_deleted, v.is_active,
                        v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
                        v.last_checked_at,
                        COUNT(DISTINCT ts.title_text) as unique_titles,
@@ -510,14 +513,14 @@ def get_all_videos_summary() -> List[dict]:
 
 
 def get_active_videos_for_dashboard() -> List[dict]:
-    """Get only active videos for dashboard display (excludes anchors/inactive)."""
+    """Get tracked videos for dashboard (excludes anchors, includes stagnated)."""
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT v.video_id, v.channel_id, c.display_name as channel_name,
-                       v.published_at, v.is_ignored, v.is_deleted, v.is_active,
+                       v.published_at, v.is_anchor, v.is_ignored, v.is_deleted, v.is_active,
                        v.comment_id, v.comment_posted_at, v.comment_last_edited_at,
                        v.last_checked_at,
                        COUNT(DISTINCT ts.title_text) as unique_titles,
@@ -525,7 +528,7 @@ def get_active_videos_for_dashboard() -> List[dict]:
                 FROM videos v
                 JOIN channels c ON v.channel_id = c.channel_id
                 LEFT JOIN title_samples ts ON v.video_id = ts.video_id
-                WHERE v.is_active = TRUE
+                WHERE v.is_anchor = FALSE
                 GROUP BY v.video_id, c.display_name
                 ORDER BY v.published_at DESC
                 """,

@@ -83,16 +83,22 @@ def get_stats():
     """Get overall statistics."""
     try:
         all_videos = get_all_videos_summary()
-        active_videos = get_active_videos_for_dashboard()
+        dashboard_videos = get_active_videos_for_dashboard()
         
-        # Active = being tracked (after cutoff, has/will have comment)
-        # Anchors = inactive reference points (before cutoff, no comment)
-        anchors = sum(1 for v in all_videos if not v.get("is_active"))
-        tracked = len(active_videos)
-        with_comments = sum(1 for v in active_videos if v.get("comment_id"))
+        # Anchors = reference points (is_anchor=TRUE)
+        # Tracked = videos shown in dashboard (is_anchor=FALSE)
+        # Active = still being checked hourly (is_active=TRUE, is_anchor=FALSE)
+        # Stagnated = finalized, no longer checked (is_active=FALSE, is_anchor=FALSE)
+        anchors = sum(1 for v in all_videos if v.get("is_anchor"))
+        tracked = len(dashboard_videos)
+        active = sum(1 for v in dashboard_videos if v.get("is_active"))
+        stagnated = sum(1 for v in dashboard_videos if not v.get("is_active"))
+        with_comments = sum(1 for v in dashboard_videos if v.get("comment_id"))
         
         return jsonify({
             "tracked_videos": tracked,
+            "active_videos": active,
+            "stagnated_videos": stagnated,
             "videos_with_comments": with_comments,
             "anchor_videos": anchors,
             "total_in_db": len(all_videos),
