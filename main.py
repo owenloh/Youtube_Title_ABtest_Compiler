@@ -220,9 +220,12 @@ def check_new_videos():
             else:
                 new_videos_raw = rss_videos
             
+            # Limit how many videos to process on first run (no known_ids)
+            max_first_run = 3 if not known_ids else 50
+            processed_count = 0
+            
             for video_id, published_at in new_videos_raw:
                 # Skip date check if published_at is None (from channel page scrape)
-                # In that case, we rely on the anchor logic to only get new videos
                 if published_at is not None and published_at.date() < CUTOFF_DATE:
                     # Still add to DB (establishes anchor) but don't process
                     add_video(video_id, channel_id, published_at, is_short=False)
@@ -231,15 +234,13 @@ def check_new_videos():
                     add_video(video_id, channel_id, published_at or datetime.now(), is_short=True)
                     continue
                 
-                # For channel page scrape (no dates), only process if this is NOT the first run
-                # First run = no known_ids, so we just store videos without processing
-                if published_at is None and not known_ids:
-                    add_video(video_id, channel_id, datetime.now(), is_short=False)
-                    print(f"[{channel_name}] Stored {video_id} as anchor (first run, not processing)")
-                    continue
-                
                 if add_video(video_id, channel_id, published_at or datetime.now(), is_short=False):
-                    new_videos.append((video_id, channel_id, channel_name, published_at or datetime.now()))
+                    # On first run, only process the most recent few videos
+                    if processed_count < max_first_run:
+                        new_videos.append((video_id, channel_id, channel_name, published_at or datetime.now()))
+                        processed_count += 1
+                    elif not known_ids:
+                        print(f"[{channel_name}] Stored {video_id} as anchor (first run limit reached)")
                     print(f"[{channel_name}] NEW VIDEO FOUND: {video_id}")
         
         except Exception as e:
