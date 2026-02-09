@@ -22,6 +22,25 @@ def serialize_value(value):
     return value
 
 
+@app.route("/api/reset", methods=["POST"])
+def reset_database():
+    """Clear all data from database. Use with caution!"""
+    try:
+        from storage import get_db_connection
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM title_samples;")
+        cur.execute("DELETE FROM title_history;")
+        cur.execute("DELETE FROM videos;")
+        cur.execute("DELETE FROM channels;")
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "message": "Database cleared"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Health check endpoint."""
