@@ -59,6 +59,14 @@ except ValueError:
 NEW_VIDEO_CHECK_INTERVAL = int(os.environ.get("NEW_VIDEO_CHECK_INTERVAL", "180"))  # 3 minutes
 ACTIVE_VIDEO_CHECK_INTERVAL = int(os.environ.get("ACTIVE_VIDEO_CHECK_INTERVAL", "3600"))  # 1 hour
 
+# How often to refresh each comment's engagement metrics (likes/replies/moderation
+# status) via the YouTube Data API. This is DECOUPLED from the hourly sampling
+# sweep: sampling + comment posting/editing still run every hour (a new variant is
+# still commented immediately), but the metrics poll -- which costs 1 Data API
+# unit per comment and does NOT affect posting -- runs only this often, to keep
+# the daily quota (10k units) from being dominated by engagement polling at scale.
+META_REFRESH_INTERVAL = int(os.environ.get("META_REFRESH_INTERVAL", "21600"))  # 6 hours
+
 # Title sampling.
 # YouTube assigns a fresh viewer identity to every cookieless request, so each
 # sample already lands in an independent experiment bucket -- coverage is limited
@@ -68,18 +76,26 @@ ACTIVE_VIDEO_CHECK_INTERVAL = int(os.environ.get("ACTIVE_VIDEO_CHECK_INTERVAL", 
 # enough samples to surface ~2-4% variants. Catching a p% variant with 90%
 # confidence needs ~ ln(0.1)/ln(1-p) samples (~56 for 4%, ~115 for 2%).
 SAMPLES_PER_RUN = int(os.environ.get("SAMPLES_PER_RUN", "40"))
-FAST_SAMPLES = int(os.environ.get("FAST_SAMPLES", "15"))  # Quick samples before posting comment
+
+# Samples taken in the immediate burst when a NEW video is first detected, BEFORE
+# posting the first comment. Posting the first comment ASAP (the moment >= 2
+# variants are seen) is the high-value action, so this is set high (~90): catching
+# a p% minority variant with 90% confidence needs ~ln(0.1)/ln(1-p) samples (~56
+# for 4%, ~90 for ~2.5%). Later hourly re-samples only refine an already-posted
+# comment (maintenance), so they stay at the smaller SAMPLES_PER_RUN.
+FAST_SAMPLES = int(os.environ.get("FAST_SAMPLES", "90"))  # Quick burst before first comment
 
 # The displayed A/B split is computed over a rolling window, not lifetime, so it
 # reflects the experiment's CURRENT ratio (YouTube shifts traffic over time and
 # ends tests). Distinct-variant detection still uses all-time samples.
 RATIO_WINDOW_DAYS = int(os.environ.get("RATIO_WINDOW_DAYS", "3"))
 
-# A comment is re-edited immediately when a new title variant appears, but for
-# percentage-only drift we rate-limit re-edits to at most once per this many
-# hours (keeps the displayed split current without burning API quota / spamming
-# the "edited" marker every hour).
-COMMENT_REFRESH_HOURS = int(os.environ.get("COMMENT_REFRESH_HOURS", "12"))
+# A comment is re-edited IMMEDIATELY when a new title variant appears; this only
+# rate-limits percentage-only drift re-edits to at most once per this many hours
+# (keeps the displayed split current without burning API quota -- each edit costs
+# 50 Data API units -- or spamming the "edited" marker). Raised to 24h at scale;
+# it does NOT delay first-post or new-variant edits, only cosmetic %-drift updates.
+COMMENT_REFRESH_HOURS = int(os.environ.get("COMMENT_REFRESH_HOURS", "24"))
 
 # Active/non-active logic: non-active if N days straight same single title
 INACTIVE_DAYS_THRESHOLD = int(os.environ.get("INACTIVE_DAYS_THRESHOLD", "5"))

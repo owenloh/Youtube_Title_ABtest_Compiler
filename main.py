@@ -17,6 +17,7 @@ from config import (
     CUTOFF_DATE,
     FAST_SAMPLES,
     INACTIVE_DAYS_THRESHOLD,
+    META_REFRESH_INTERVAL,
     NEW_VIDEO_CHECK_INTERVAL,
     RATIO_WINDOW_DAYS,
     SAMPLES_PER_RUN,
@@ -411,12 +412,16 @@ def check_new_videos():
             traceback.print_exc()
 
 
-def _check_one_active_video(video_info: dict) -> None:
+def _check_one_active_video(video_info: dict, refresh_meta: bool = True) -> None:
     """Body of the hourly per-video check, run concurrently across all active
     videos (see check_active_videos) rather than one at a time -- with a few
     hundred active videos across many channels, a sequential loop here could
     run longer than ACTIVE_VIDEO_CHECK_INTERVAL and delay new-video checks,
-    since both run on the same scheduler thread."""
+    since both run on the same scheduler thread.
+
+    refresh_meta: whether to also poll the comment's engagement metrics this
+    pass (1 Data API unit each). Sampling + comment posting/editing always run;
+    only this metrics poll is gated to a slower cadence."""
     video_id = video_info["video_id"]
     channel_name = video_info.get("channel_name") or video_info["channel_id"]
 
@@ -433,7 +438,9 @@ def _check_one_active_video(video_info: dict) -> None:
 
         # Always re-sample so new variants are caught on every hourly pass.
         # _ensure_comment posts the first comment if this pass is what finally
-        # pushes the video to >= 2 distinct titles, otherwise it updates.
+        # pushes the video to >= 2 distinct titles, otherwise it updates. This
+        # (posting/editing on a new variant) is NEVER throttled -- it runs every
+        # hour and is the timely part.
         before = _distinct_titles(video_id)
         titles = sample_titles(video_id, SAMPLES_PER_RUN, parallel=True)
         if not titles:
@@ -441,13 +448,16 @@ def _check_one_active_video(video_info: dict) -> None:
         _record_samples(video_id, titles)
         _ensure_comment(video_id, channel_name, before)
 
-        # Refresh the comment's moderation status + engagement (likes/replies)
-        # so the dashboard shows current virality and held->published flips.
-        cid = get_comment_id(video_id)
-        if cid:
-            meta = fetch_comment_meta(cid)
-            if meta:
-                update_comment_meta(video_id, meta["status"], meta["likes"], meta["replies"])
+        # Engagement/status refresh (likes, replies, held->published) costs 1
+        # Data API unit per comment and does NOT affect posting -- so it runs on
+        # a slower cadence (refresh_meta) to keep the daily quota in check at
+        # scale, rather than every hourly pass.
+        if refresh_meta:
+            cid = get_comment_id(video_id)
+            if cid:
+                meta = fetch_comment_meta(cid)
+                if meta:
+                    update_comment_meta(video_id, meta["status"], meta["likes"], meta["replies"])
 
     except Exception as e:
         print(f"Error checking video {video_id}: {e}", file=sys.stderr)
@@ -455,7 +465,7 @@ def _check_one_active_video(video_info: dict) -> None:
         traceback.print_exc()
 
 
-def check_active_videos():
+def check_active_videos(refresh_meta: bool = True):
     """Check active videos for title changes (hourly task).
 
     Videos are already filtered by is_active = TRUE in the database.
@@ -465,13 +475,17 @@ def check_active_videos():
     sweep finishes in roughly one video's worth of wall-clock time instead of
     len(active_videos) times that -- necessary once many channels/videos are
     tracked, since this and check_new_videos share the scheduler's main thread.
+
+    refresh_meta: forwarded per-video; when False this pass samples + posts/edits
+    comments as usual but skips the engagement-metric API poll (see the scheduler
+    loop, which only enables it every META_REFRESH_INTERVAL).
     """
-    print(f"\n=== Checking active videos at {datetime.now()} ===")
+    print(f"\n=== Checking active videos at {datetime.now()} (refresh_meta={refresh_meta}) ===")
 
     active_videos = get_active_videos()
     print(f"Found {len(active_videos)} active videos to check")
 
-    futures = [executor.submit(_check_one_active_video, v) for v in active_videos]
+    futures = [executor.submit(_check_one_active_video, v, refresh_meta) for v in active_videos]
     for future in as_completed(futures):
         future.result()  # exceptions are already caught/logged inside; re-raise only bugs in the wrapper itself
 
@@ -502,21 +516,28 @@ def run_scheduler():
     
     last_new_check = 0
     last_active_check = time.time()  # Don't run hourly check immediately on startup
-    
+    last_meta_check = 0  # Refresh engagement metrics on the first active sweep
+
     try:
         while True:
             now = time.time()
-            
+
             # Check for new videos
             if now - last_new_check >= NEW_VIDEO_CHECK_INTERVAL:
                 check_new_videos()
                 last_new_check = now
-            
-            # Check active videos
+
+            # Check active videos. Sampling + comment posting/editing run every
+            # ACTIVE_VIDEO_CHECK_INTERVAL, but the (1 Data API unit each)
+            # engagement-metric poll only piggybacks on this sweep every
+            # META_REFRESH_INTERVAL -- keeping the daily quota in check at scale.
             if now - last_active_check >= ACTIVE_VIDEO_CHECK_INTERVAL:
-                check_active_videos()
+                refresh_meta = now - last_meta_check >= META_REFRESH_INTERVAL
+                check_active_videos(refresh_meta=refresh_meta)
                 last_active_check = now
-            
+                if refresh_meta:
+                    last_meta_check = now
+
             # Sleep for a short time to avoid busy loop
             time.sleep(10)
     
