@@ -258,10 +258,14 @@ def add_channel():
         if not channel_id:
             return jsonify({"error": f"could not resolve '{handle}' to a channel"}), 422
 
-        add_channel_admin(channel_id, display_name)
-        from main import resync_channel_anchor
-        resync_channel_anchor(channel_id, display_name)
-        return jsonify({"status": "ok", "channel_id": channel_id})
+        created = add_channel_admin(channel_id, display_name)
+        if created:
+            # Only fast-forward the anchor for a genuinely new channel -- doing
+            # this for one that's already tracked would swallow any of its very
+            # recent, not-yet-processed videos as permanent inactive anchors.
+            from main import resync_channel_anchor
+            resync_channel_anchor(channel_id, display_name)
+        return jsonify({"status": "ok", "channel_id": channel_id, "created": created})
     except Exception as e:
         return _server_error(e)
 
@@ -287,8 +291,14 @@ def add_channels_bulk():
                 if not channel_id:
                     logger.warning("Bulk import: could not resolve %s", handle)
                     continue
-                add_channel_admin(channel_id, display_name)
-                resync_channel_anchor(channel_id, display_name)
+                created = add_channel_admin(channel_id, display_name)
+                if created:
+                    # Skip already-tracked channels entirely -- resyncing them
+                    # here would swallow their not-yet-processed recent videos
+                    # as permanent inactive anchors.
+                    resync_channel_anchor(channel_id, display_name)
+                else:
+                    logger.info("Bulk import: %s already tracked, left untouched", display_name)
             except Exception:
                 logger.exception("Bulk import failed for %s", handle)
             time.sleep(1)  # be polite to YouTube across ~100+ resolutions

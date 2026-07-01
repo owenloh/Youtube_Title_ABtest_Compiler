@@ -197,13 +197,17 @@ def add_channel_admin(channel_id: str, display_name: str) -> bool:
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # rowcount is 1 for both a true INSERT and an ON CONFLICT DO UPDATE,
+            # so it can't tell them apart -- use the xmax=0 trick instead (xmax
+            # is unset only on a freshly inserted row, never on an update).
             cur.execute(
                 "INSERT INTO channels (channel_id, display_name, enabled, track_from_date) "
                 "VALUES (%s, %s, TRUE, CURRENT_DATE) "
-                "ON CONFLICT (channel_id) DO UPDATE SET display_name = EXCLUDED.display_name",
+                "ON CONFLICT (channel_id) DO UPDATE SET display_name = EXCLUDED.display_name "
+                "RETURNING (xmax = 0) AS inserted",
                 (channel_id, display_name),
             )
-            created = cur.rowcount > 0
+            created = bool(cur.fetchone()[0])
         conn.commit()
         return created
     finally:
