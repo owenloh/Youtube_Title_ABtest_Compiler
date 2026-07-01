@@ -22,6 +22,23 @@ def _normalize_status(moderation_status, is_public):
     return "published"
 
 
+def _is_quota_or_rate_error(exc) -> bool:
+    """True if an API error is a quota/rate-limit condition.
+
+    These surface as HTTP 403 (same status as a genuinely deleted/forbidden
+    comment), so callers MUST check this before treating a 403 as "deleted" --
+    otherwise hitting the daily quota would wrongly mark videos as ignored and
+    drop them from tracking permanently (the quota resets at midnight PT).
+    """
+    s = str(exc).lower()
+    return (
+        "quota" in s
+        or "ratelimit" in s
+        or "rate limit" in s
+        or "userratelimitexceeded" in s
+    )
+
+
 def get_credentials():
     """Build credentials from refresh token (set in env for Railway)."""
     if not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET or not YOUTUBE_REFRESH_TOKEN:
@@ -70,8 +87,8 @@ def post_comment(video_id: str, text: str) -> tuple[str | None, str | None]:
         print(f"Comment {comment_id} on {video_id}: {status.upper()}")
         return comment_id, status
     except HttpError as e:
-        if "quota" in str(e).lower():
-            print(f"QUOTA EXCEEDED - cannot post comment on {video_id}")
+        if _is_quota_or_rate_error(e):
+            print(f"QUOTA/RATE LIMIT - cannot post comment on {video_id}")
             return None, "quota_exceeded"
         print(f"API error posting comment on {video_id}: {e}")
         return None, "error"
@@ -100,10 +117,18 @@ def update_comment(comment_id: str, text: str) -> bool:
         youtube.comments().update(part="snippet", body=body).execute()
         return True
     except HttpError as e:
-        # 404 or 403 usually means comment was deleted
+        # Quota/rate-limit errors ALSO come back as 403 -- check them FIRST and
+        # treat as transient (retry later), never as a deletion. Otherwise every
+        # edit attempt after the daily quota runs out would be misread as "comment
+        # deleted" and permanently drop the video from tracking.
+        if _is_quota_or_rate_error(e):
+            print(f"Quota/rate limit updating comment {comment_id} - will retry later")
+            return False
+        # A genuine 404 (and, after ruling out quota, a 403) means the comment is
+        # gone / no longer editable -- re-raise so the caller marks it ignored.
         if e.resp.status in (404, 403):
             print(f"Comment {comment_id} not found (deleted?) - status {e.resp.status}")
-            raise  # Re-raise so caller can mark video as ignored
+            raise
         print(f"API error updating comment: {e}")
         return False
 
